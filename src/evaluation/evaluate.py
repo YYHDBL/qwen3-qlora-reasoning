@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified evaluation entry point for Base and LoRA model variants."""
+"""Base 与 LoRA 模型变体的统一评估入口。"""
 
 from __future__ import annotations
 
@@ -28,26 +28,27 @@ ProgressCallback = Callable[[int, int], None]
 
 
 def console_status(message: str) -> None:
+    """向 stderr 打印带时间戳的状态消息。"""
     timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
     print(f"[{timestamp}] [evaluate] {message}", file=sys.stderr, flush=True)
 
 
 @dataclass(frozen=True)
 class EvaluationConfig:
-    model_id: str
-    model_mode: str
-    split: str
-    data_path: str
-    output_dir: str
-    cache_dir: str | None = None
-    adapter_path: str | None = None
-    model_revision: str | None = None
-    adapter_revision: str | None = None
-    max_length: int = DEFAULT_MAX_LENGTH
-    max_new_tokens: int = 64
-    batch_size: int = 1
-    limit: int | None = None
-    allow_test: bool = False
+    model_id: str  # Hugging Face 模型标识符（如 Qwen/Qwen3-4B-Base）
+    model_mode: str  # 加载模式：bf16（BF16精度）/ nf4（4-bit量化）/ lora（LoRA适配器）
+    split: str  # 数据集分区：validation 或 test
+    data_path: str  # JSONL 格式评估数据文件路径
+    output_dir: str  # 评估产物（predictions / metrics / config）输出目录
+    cache_dir: str | None = None  # Hugging Face 模型/分词器下载缓存目录（可选）
+    adapter_path: str | None = None  # LoRA 适配器权重路径，lora 模式必填
+    model_revision: str | None = None  # 基础模型版本标识（Git 哈希/分支），用于可复现加载
+    adapter_revision: str | None = None  # LoRA 适配器版本标识（可选）
+    max_length: int = DEFAULT_MAX_LENGTH  # 输入 token 最大长度，超过截断
+    max_new_tokens: int = 64  # 每次生成的最大新 token 数，限制输出长度
+    batch_size: int = 1  # 并行评估的批次大小，控制显存消耗
+    limit: int | None = None  # 限制评估样本数（可选，用于快速验证）
+    allow_test: bool = False  # 是否允许在受保护的 test 分区上运行（需显式 opt-in）
 
     def __post_init__(self) -> None:
         if self.model_mode not in MODEL_MODES:
@@ -70,6 +71,7 @@ class EvaluationConfig:
 
 
 def validate_split_access(split: str, allow_test: bool) -> None:
+    """拒绝无效 split 并执行 ``--allow-test`` 守卫。"""
     if split not in {"validation", "test"}:
         raise ValueError("evaluation split must be validation or test")
     if split == "test" and not allow_test:
@@ -84,29 +86,38 @@ def evaluate_records(
     batch_size: int,
     progress: ProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
+    """批量生成并将每个预测与标准答案比较。
+
+    ``generate`` 回调接收一批 prompt 字符串，必须返回等长的预测结果序列。
+    """
     if not records:
         raise ValueError("cannot evaluate empty records")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
 
     predictions: list[dict[str, Any]] = []
+    # 按 batch_size 分批处理所有样本，平衡显存消耗与吞吐效率
     for start in range(0, len(records), batch_size):
         batch = records[start : start + batch_size]
+        # 将原始 prompt 包装为统一的评估格式模板（如追加 "Answer:" 提示）
         prompts = [
             format_evaluation_prompt(record["prompt"]) for record in batch
         ]
+        # 调用生成回调对整批 prompt 做一次前向传播，利用 batch 并行加速
         generated = list(generate(prompts))
         if len(generated) != len(batch):
             raise RuntimeError(
                 "generator returned a different number of predictions "
                 f"({len(generated)}) than prompts ({len(batch)})"
             )
+        # 逐条对比生成结果与标准答案：根据 task_type 选择对应的解析/比较策略
         for record, prediction_raw in zip(batch, generated, strict=True):
             comparison = evaluate_answer(
                 record["task_type"],
                 record["answer"],
                 prediction_raw,
             )
+            # 合并数据集元信息与评估结果为统一预测记录
             predictions.append(
                 {
                     "id": record["id"],
@@ -145,6 +156,7 @@ def write_evaluation_artifacts(
     predictions: Sequence[Mapping[str, Any]],
     run_config: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """将 predictions、error cases、metrics 和 config 写入 *output_dir*。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics = compute_metrics(predictions)
     error_cases = [
@@ -185,6 +197,7 @@ def build_run_config(
     dataset_sha256_after: str,
     evaluated_count: int,
 ) -> dict[str, Any]:
+    """构建可重现的 run-config 字典用于产物归档。"""
     return {
         **config.to_dict(),
         "executed_at": datetime.now(timezone.utc).isoformat(),
@@ -211,13 +224,14 @@ def build_run_config(
 
 
 class HuggingFaceGenerator:
-    """Delayed-import generator shared by all supported model modes."""
+    """延迟导入的生成器，支持所有 model mode（bf16 / nf4 / lora）。"""
 
     def __init__(
         self,
         config: EvaluationConfig,
         status: StatusCallback = console_status,
     ):
+        # 延迟导入重型依赖，避免在非评估场景（如数据预处理 CLI）时加载
         status("Importing PyTorch and Transformers")
         import torch
         from transformers import (
@@ -226,6 +240,7 @@ class HuggingFaceGenerator:
             BitsAndBytesConfig,
         )
 
+        # 检查 CUDA 可用性和 BF16 支持，用于后续 dtype 和 device_map 策略选择
         if torch.cuda.is_available():
             status(
                 "CUDA available: "
@@ -250,12 +265,16 @@ class HuggingFaceGenerator:
         status(
             f"Tokenizer loaded: {self.tokenizer.__class__.__name__}"
         )
+        # 左填充（左对齐）：较短序列在左侧补 pad，确保生成的新 token 在序列右侧对齐
+        # 这避免了因右侧填充导致生成的 token 被 pad 截断的问题
         self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token_id is None:
             if self.tokenizer.eos_token_id is None:
                 raise ValueError("tokenizer has neither PAD nor EOS token")
+            # 无专用 pad token 时复用 eos token，避免 attention mask 计算报错
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # device_map="auto" 让 accelerate 自动将模型层分配到可用设备
         model_kwargs: dict[str, Any] = {
             "device_map": "auto",
         }
@@ -263,10 +282,15 @@ class HuggingFaceGenerator:
             model_kwargs["revision"] = config.model_revision
         if config.cache_dir:
             model_kwargs["cache_dir"] = config.cache_dir
+        # 根据 model_mode 决定加载策略：bf16 完整精度 vs nf4 4-bit 量化
         if config.model_mode == "bf16":
+            # BF16 模式：直接加载完整 BF16 权重，适合显存充足的场景（如 A100）
             model_kwargs["torch_dtype"] = torch.bfloat16
             load_description = "BF16 Base"
         else:
+            # NF4 模式：4-bit 量化 + 双重量化，显著降低显存占用
+            # bnb_4bit_use_double_quant=True 对量化常数再做一次量化，进一步压缩
+            # bnb_4bit_compute_dtype=BF16 保证前向计算仍用较高精度
             model_kwargs["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
@@ -286,7 +310,10 @@ class HuggingFaceGenerator:
         status(
             f"Base model loaded in {time.monotonic() - load_started:.1f}s"
         )
+        # LoRA 模式：在基础模型之上加载微调后的适配器权重
+        # 仅推理时使用适配层的增量参数，基础权重保持冻结
         if config.model_mode == "lora":
+            # 延迟导入 PEFT，仅在 LoRA 模式需要，避免不必要的依赖
             from peft import PeftModel
 
             adapter_kwargs: dict[str, Any] = {}
@@ -299,12 +326,16 @@ class HuggingFaceGenerator:
                 model, config.adapter_path, **adapter_kwargs
             )
             status("LoRA adapter loaded")
+        # 切换为评估模式，关闭 dropout 等仅训练时生效的随机行为
         self.model = model.eval()
         self.torch = torch
         self.max_length = config.max_length
         self.max_new_tokens = config.max_new_tokens
 
     def __call__(self, prompts: Sequence[str]) -> list[str]:
+        """对一批 prompt 做 tokenize → generation → decode。"""
+        # 分词：同时做填充和截断，确保批次内序列长度一致
+        # add_special_tokens=False 因为评估 prompt 已由 format_evaluation_prompt 处理
         inputs = self.tokenizer(
             list(prompts),
             return_tensors="pt",
@@ -313,12 +344,17 @@ class HuggingFaceGenerator:
             max_length=self.max_length,
             add_special_tokens=False,
         )
+        # 将分词结果（input_ids、attention_mask）移到模型所在设备
         inputs = {
             key: value.to(self.model.device)
             for key, value in inputs.items()
         }
+        # 记录输入长度，后续用于从生成输出中截取仅新增的部分
         input_length = inputs["input_ids"].shape[1]
+        # inference_mode 等价于 torch.no_grad()，且额外禁用 autograd 开销
         with self.torch.inference_mode():
+            # do_sample=False → 贪婪解码（每次选概率最高的 token），保证确定性输出
+            # pad_token_id / eos_token_id 确保模型正确处理填充位置和终止条件
             outputs = self.model.generate(
                 **inputs,
                 do_sample=False,
@@ -326,6 +362,7 @@ class HuggingFaceGenerator:
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
+        # 只解码新生成的 token 部分（从 input_length 起），跳过输入内容的复读
         return [
             self.tokenizer.decode(
                 output[input_length:],
@@ -340,6 +377,7 @@ def run_evaluation(
     config: EvaluationConfig,
     status: StatusCallback = console_status,
 ) -> dict[str, Any]:
+    # 步骤 1：入口日志与分区权限校验（test 分区需显式 --allow-test）
     started = time.monotonic()
     status(
         "Starting evaluation: "
@@ -347,6 +385,7 @@ def run_evaluation(
         f"limit={config.limit or 'all'}, batch_size={config.batch_size}"
     )
     validate_split_access(config.split, config.allow_test)
+    # 步骤 2：加载数据集并计算 SHA256 哈希（用于后续完整性校验）
     data_path = Path(config.data_path)
     status(f"Loading dataset: {data_path}")
     dataset_hash_before = sha256_file(data_path)
@@ -355,6 +394,7 @@ def run_evaluation(
         records = records[: config.limit]
     status(f"Loaded {len(records)} {config.split} records")
 
+    # 步骤 3：初始化生成器（延迟导入 + 加载模型权重），执行批量生成与评估
     generator = HuggingFaceGenerator(config, status=status)
     status("Starting generation")
     predictions = evaluate_records(
@@ -366,16 +406,20 @@ def run_evaluation(
             f"({completed / total:.1%})"
         ),
     )
+    # 步骤 4：二次校验数据集完整性，防止评估过程中文件被外部修改
     dataset_hash_after = sha256_file(data_path)
     if dataset_hash_before != dataset_hash_after:
         raise RuntimeError(f"dataset changed during evaluation: {data_path}")
 
+    # 步骤 5：构建可复现的运行配置快照（含版本号、哈希、时间戳）
     run_config = build_run_config(
         config,
         dataset_hash_before,
         dataset_hash_after,
         len(records),
     )
+    # 步骤 6：写入评估产物目录
+    # predictions.jsonl / error_cases.jsonl / metrics.json / run_config.json
     status(f"Writing evaluation artifacts: {config.output_dir}")
     metrics = write_evaluation_artifacts(
         Path(config.output_dir), predictions, run_config

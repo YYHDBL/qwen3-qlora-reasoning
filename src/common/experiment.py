@@ -1,4 +1,4 @@
-"""Filesystem and metadata helpers for experiment artifacts."""
+"""实验产物的文件系统和元数据辅助函数。"""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def write_yaml(path: Path, value: Mapping[str, Any]) -> None:
 def ensure_new_output_dir(
     path: Path, resume_from_checkpoint: Path | None = None
 ) -> None:
-    """Create a new output directory or validate an explicit resume target."""
+    """创建新输出目录，或校验显式指定的 resume 目标。"""
     if path.exists():
         if resume_from_checkpoint is None:
             raise FileExistsError(f"output directory already exists: {path}")

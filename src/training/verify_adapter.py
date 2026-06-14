@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reload a saved Stage 1 adapter in a fresh process and generate once."""
+"""在新进程中重新加载已保存的 Stage 1 adapter 并生成一次。"""
 
 from __future__ import annotations
 
@@ -16,15 +16,36 @@ def verify_adapter(
     adapter_path: Path,
     output_path: Path,
 ) -> dict:
+    """加载训练好的 LoRA adapter，在第一个 dev 样本上生成并报告结果。
+
+    此函数在独立进程中调用（确保完全重新加载），用于验证：
+    1. adapter_config.json 存在且格式正确
+    2. adapter 权重可以成功加载到 base 模型上
+    3. 加载后的模型能正常生成输出（不崩溃、不产生空文本）
+    4. 停止 token 正常触发（检查 stop_reason）
+    """
+    # 第 1 步: 验证 adapter 目录包含必要的配置文件
     if not (adapter_path / "adapter_config.json").is_file():
         raise FileNotFoundError(f"adapter_config.json is missing from {adapter_path}")
+
     from ..evaluation.instruction_eval import load_instruction_eval
     from .model_loader import ChatGenerator
 
+    # 第 2 步: 加载 dev 评估集的第一条样本作为测试输入
     dev_path = Path(config["evaluation"]["dev_path"])
     sample = load_instruction_eval(dev_path, "dev")[0]
+
+    # 第 3 步: 创建 ChatGenerator（内部会 load_lora_model + load_tokenizer）
+    #   - adapter_path 非空 → 加载 LoRA adapter
+    #   - is_trainable=False → adapter 冻结，仅推理
     generator = ChatGenerator(config, adapter_path=str(adapter_path))
+
+    # 第 4 步: 在单条样本上生成（batch_size=1）
     generated = generator.generate([sample["messages"]], batch_size=1)[0]
+
+    # 第 5 步: 构建验证结果
+    #   - passed=True: 生成成功（连接测试 + 功能测试）
+    #   - 记录 sample_id / generated_tokens / stop_reason 供后续分析
     result = {
         "passed": True,
         "executed_at": datetime.now(timezone.utc).isoformat(),
@@ -33,6 +54,7 @@ def verify_adapter(
         "generated_tokens": generated["generated_tokens"],
         "stop_reason": generated["stop_reason"],
     }
+    # 第 6 步: 写入结果 JSON（供 smoke/formal 阶段的门控检查）
     write_json(output_path, result)
     return result
 

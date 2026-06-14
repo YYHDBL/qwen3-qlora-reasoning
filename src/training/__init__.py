@@ -1,1 +1,1 @@
-"""BF16 LoRA training package."""
+"""BF16 LoRA 训练包。"""

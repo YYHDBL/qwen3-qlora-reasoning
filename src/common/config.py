@@ -1,4 +1,4 @@
-"""YAML configuration helpers for reproducible experiments."""
+"""可重现实验的 YAML 配置辅助函数。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import yaml
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
-    """Load one YAML mapping from disk."""
+    """从磁盘加载一个 YAML 映射。"""
     try:
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -23,7 +23,7 @@ def load_yaml_config(path: Path) -> dict[str, Any]:
 
 
 def apply_overrides(config: Mapping[str, Any], overrides: list[str]) -> dict[str, Any]:
-    """Return a deep copy with dotted ``key=value`` overrides applied."""
+    """返回深拷贝并应用点号分隔的 ``key=value`` 覆盖项。"""
     updated = copy.deepcopy(dict(config))
     for override in overrides:
         if "=" not in override:
@@ -52,13 +52,16 @@ def _require_mapping(config: Mapping[str, Any], key: str) -> Mapping[str, Any]:
 
 
 def validate_stage1_config(config: Mapping[str, Any]) -> None:
-    """Validate invariants required by the BF16 Stage 1 experiment."""
+    """校验 BF16 Stage 1 实验所需的约束条件。"""
+    experiment = _require_mapping(config, "experiment")
     model = _require_mapping(config, "model")
     data = _require_mapping(config, "data")
     training = _require_mapping(config, "training")
     lora = _require_mapping(config, "lora")
     evaluation = _require_mapping(config, "evaluation")
 
+    if not experiment.get("swanlab_project") or not isinstance(experiment.get("swanlab_project"), str):
+        raise ValueError("experiment.swanlab_project is required and must be a non-empty string")
     if model.get("id") != "Qwen/Qwen3-4B-Base":
         raise ValueError("Stage 1 model must be Qwen/Qwen3-4B-Base")
     if model.get("load_in_4bit") or model.get("load_in_8bit"):

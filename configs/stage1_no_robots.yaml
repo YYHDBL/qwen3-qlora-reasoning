@@ -1,11 +1,15 @@
 experiment:
   name: stage1_no_robots
   output_root: outputs/stage1_no_robots
+  swanlab_project: "stage1-no-robots"
+  swanlab_workspace: yyhdbl
+  swanlab_api_key: w5i4zEmPe04Nm4ul9RloZ
 
 model:
   id: Qwen/Qwen3-4B-Base
   revision: null
   tokenizer_revision: null
+  cache_dir: .hf-cache/hub
   dtype: bfloat16
   attn_implementation: sdpa
   load_in_4bit: false

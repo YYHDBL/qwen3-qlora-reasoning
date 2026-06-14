@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze tokenizer lengths without loading model weights."""
+"""无需加载模型权重即可分析 tokenizer 长度。"""
 
 from __future__ import annotations
 
@@ -41,18 +41,22 @@ def read_jsonl(path: Path, split: str) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
+            # 跳过空行，兼容文件尾部换行
             if not line.strip():
                 continue
+            # 每行必须是合法 JSON
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(
                     f"{path}:{line_number} contains invalid JSON: {exc.msg}"
                 ) from exc
+            # 每行必须是 JSON 对象（拒绝数组、字符串等顶层类型）
             if not isinstance(value, dict):
                 raise ValueError(
                     f"{path}:{line_number} must contain a JSON object"
                 )
+            # 校验必填字段 id、task_type、prompt、answer 是否全部存在
             missing = [
                 field for field in REQUIRED_FIELDS if field not in value
             ]
@@ -61,6 +65,7 @@ def read_jsonl(path: Path, split: str) -> list[dict[str, str]]:
                     f"{path}:{line_number} missing required fields: "
                     f"{', '.join(missing)}"
                 )
+            # 所有必填字段的值类型必须为字符串
             invalid_types = [
                 field
                 for field in REQUIRED_FIELDS
@@ -71,6 +76,7 @@ def read_jsonl(path: Path, split: str) -> list[dict[str, str]]:
                     f"{path}:{line_number} fields must be strings: "
                     f"{', '.join(invalid_types)}"
                 )
+            # 只保留必要字段，防止原始 JSONL 中的扩展字段污染下游处理逻辑
             records.append(
                 {
                     "id": value["id"],
@@ -88,6 +94,7 @@ def read_jsonl(path: Path, split: str) -> list[dict[str, str]]:
 def load_datasets(
     data_dir: Path,
 ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
+    """读取 train/validation/test 三个 split，返回合并的记录和文件元数据。"""
     records: list[dict[str, str]] = []
     input_files: dict[str, dict[str, Any]] = {}
     for split in SPLITS:
@@ -105,6 +112,7 @@ def load_datasets(
 
 
 def _token_count(tokenizer: Any, text: str) -> int:
+    """返回使用 *tokenizer* 对 *text* 编码后的 token 数。"""
     encoded = tokenizer(
         text,
         add_special_tokens=False,
@@ -117,12 +125,14 @@ def _token_count(tokenizer: Any, text: str) -> int:
 def analyze_records(
     records: Sequence[Mapping[str, str]], tokenizer: Any
 ) -> list[dict[str, Any]]:
+    """对每条记录的 prompt、answer 和完整序列做 tokenization。"""
     eos_token = tokenizer.eos_token
     if not eos_token:
         raise ValueError("tokenizer has no EOS token")
 
     analyzed: list[dict[str, Any]] = []
     for record in records:
+        # format_training_text 将 prompt 和 answer 组装为训练时使用的实际文本格式
         prompt_text, answer_text, full_text = format_training_text(
             record["prompt"], record["answer"], eos_token
         )
@@ -133,8 +143,9 @@ def analyze_records(
                 "task_type": record["task_type"],
                 "prompt_tokens": _token_count(tokenizer, prompt_text),
                 "answer_tokens": _token_count(tokenizer, answer_text),
-                # Tokenize the joined text independently because token
-                # boundaries can change where prompt and answer meet.
+                # 对完整文本独立分词，而非简单相加 prompt_tokens + answer_tokens。
+                # 原因：prompt 和 answer 拼接处的字符边界可能导致 BPE/Unigram
+                # 划分发生变化，合并后的 token 数可能不等于两部分之和。
                 "full_sequence_tokens": _token_count(tokenizer, full_text),
             }
         )
@@ -152,11 +163,15 @@ def percentile(values: Sequence[int | float], quantile: float) -> float | int:
     sorted_values = sorted(values)
     if len(sorted_values) == 1:
         return sorted_values[0]
+    # 计算分位数在排序数组中的浮点位置（0-based 索引）
+    # 使用 (N-1) * quantile 公式，与 NumPy 默认的 linear 插值策略一致
     position = (len(sorted_values) - 1) * quantile
     lower_index = math.floor(position)
     upper_index = math.ceil(position)
+    # 位置恰好落在整数索引上时直接取值，无需插值
     if lower_index == upper_index:
         return sorted_values[lower_index]
+    # 线性插值：在下位值与上位值之间按分数比例取值
     fraction = position - lower_index
     return (
         sorted_values[lower_index] * (1 - fraction)
@@ -188,6 +203,7 @@ def summarize_values(values: Sequence[int]) -> dict[str, float | int]:
 def summarize_group(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, float | int]]:
+    """计算所有 ``LENGTH_FIELDS`` 的长度统计（min/mean/p50/p90/p95/p99/max）。"""
     if not records:
         raise ValueError("cannot summarize an empty record group")
     return {
@@ -199,6 +215,7 @@ def summarize_group(
 def _group_by(
     records: Sequence[Mapping[str, Any]], key: str
 ) -> dict[str, list[Mapping[str, Any]]]:
+    """按 *key* 分组记录并返回排序后的字典。"""
     groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for record in records:
         groups[str(record[key])].append(record)
@@ -235,6 +252,7 @@ def build_statistics(
 def _overflow_summary(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    """统计每个 ``THRESHOLDS`` 阈值下有多少记录溢出。"""
     count = len(records)
     return {
         str(threshold): {
@@ -283,6 +301,8 @@ def build_overflow_statistics(
 def recommend_max_length(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    # 仅以 train + validation 作为开发集来决定 max_length
+    # 不参考 test 分区，避免数据泄露导致过拟合于测试分布
     development_records = [
         record
         for record in records
@@ -291,6 +311,7 @@ def recommend_max_length(
     if not development_records:
         raise ValueError("train and validation records are required")
 
+    # 对每个候选阈值，统计 full_sequence_tokens 超过该阈值的样本数量和比例
     candidate_results = []
     for candidate in MAX_LENGTH_CANDIDATES:
         overflow_count = sum(
@@ -307,6 +328,8 @@ def recommend_max_length(
             }
         )
 
+    # 选择策略：优先选能完全覆盖（overflow_count == 0）的最小候选值。
+    # 理由：在 24GB RTX 4090 上，更短的 max_length 允许更大的 batch_size 和更低显存占用。
     complete_candidate = next(
         (
             result
@@ -315,6 +338,7 @@ def recommend_max_length(
         ),
         None,
     )
+    # 若无完全覆盖的候选值，回退到最大值 4096（最小化溢出样本数）
     selected = complete_candidate or candidate_results[-1]
     if complete_candidate:
         reason = (
@@ -330,6 +354,7 @@ def recommend_max_length(
             "samples require an explicit truncation or filtering decision."
         )
 
+    # 查找比选定值更小的上一级候选，给出长尾说明（若不选更小值会丢多少样本）
     previous = next(
         (
             result
@@ -395,6 +420,7 @@ def build_report(
     input_files: Mapping[str, Mapping[str, Any]],
     execution_time: str | None = None,
 ) -> dict[str, Any]:
+    """组装完整的 tokenizer 分析报告，含统计、溢出、推荐值。"""
     longest = sorted(
         records,
         key=lambda record: (
@@ -587,6 +613,9 @@ def load_tokenizer(model_id: str) -> Any:
     from transformers.utils.hub import cached_file
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    # 从本地缓存的 tokenizer_config.json 路径中提取 Git 快照哈希。
+    # Hugging Face 缓存路径格式为：.../snapshots/<commit_hash>/tokenizer_config.json
+    # local_files_only=True 避免在分析时触发不必要的网络请求。
     config_path = cached_file(
         model_id, "tokenizer_config.json", local_files_only=True
     )
@@ -595,6 +624,7 @@ def load_tokenizer(model_id: str) -> Any:
         if "snapshots" in path_parts:
             snapshot_index = path_parts.index("snapshots")
             if snapshot_index + 1 < len(path_parts):
+                # snapshots 目录的下一级即为 Git commit hash
                 tokenizer._analysis_revision = path_parts[snapshot_index + 1]
     return tokenizer
 

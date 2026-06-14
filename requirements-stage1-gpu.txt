@@ -7,3 +7,4 @@ peft>=0.18,<1
 trl>=1.6,<2
 accelerate>=1.10,<2
 tensorboard>=2.18,<3
+swanlab>=0.4,<1
