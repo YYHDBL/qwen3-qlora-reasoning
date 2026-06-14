@@ -13,7 +13,7 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any, Iterable, Mapping, Sequence
 
-from src.prompt_format import format_training_text
+from ..common.prompt_format import format_training_text
 
 
 SPLITS = ("train", "validation", "test")

@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.answer_evaluation import evaluate_answer
+from src.evaluation.answer_evaluation import evaluate_answer
 
 
 def test_bit_manipulation_requires_exact_eight_bits():

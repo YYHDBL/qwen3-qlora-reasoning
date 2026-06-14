@@ -4,17 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from src.analyze_tokens import (
+from src.evaluation.analyze_tokens import (
     analyze_dataset,
     analyze_records,
     build_report,
     collect_tokenizer_metadata,
-    format_training_text,
     load_datasets,
     percentile,
     read_jsonl,
     render_markdown_report,
 )
+from src.common.prompt_format import format_training_text
 
 
 REQUIRED_FIELDS = {"id", "task_type", "prompt", "answer"}

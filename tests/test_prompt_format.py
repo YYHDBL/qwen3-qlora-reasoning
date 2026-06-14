@@ -1,4 +1,4 @@
-from src.prompt_format import (
+from src.common.prompt_format import (
     format_evaluation_prompt,
     format_training_text,
 )

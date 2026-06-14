@@ -51,7 +51,7 @@ training on a 24GB RTX 4090.
 
 ### Artifacts
 
-- `src/analyze_tokens.py`
+- `src/evaluation/analyze_tokens.py`
 - `tests/test_analyze_tokens.py`
 - `data/processed/tokenizer_report.json`
 - `data/processed/tokenizer_report.md`
@@ -88,6 +88,13 @@ training on a 24GB RTX 4090.
 - `requirements-dev.txt`
 - `requirements-gpu.txt`
 - `docs/SERVER_EVALUATION.md`
+
+## Completed: Source Reorganization
+
+- Grouped dataset preparation code under `src/data_processing/`
+- Grouped tokenizer analysis and evaluation code under `src/evaluation/`
+- Moved shared prompt formatting into `src/common/`
+- Updated tests and documentation to use the package-based module paths
 
 ## Current Stop Point
 

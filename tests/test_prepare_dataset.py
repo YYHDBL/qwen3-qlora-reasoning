@@ -1,5 +1,5 @@
-from src.dataset_classifier import Classification, classify_record
-from src.dataset_splitters import allocate_split_quotas
+from src.data_processing.classifier import Classification, classify_record
+from src.data_processing.splitters import allocate_split_quotas
 
 
 def test_prepare_dataset_support_modules_are_importable():

@@ -36,7 +36,7 @@ Do not put tokens in repository files or command history.
 Run exactly three validation samples with the BF16 Base model:
 
 ```bash
-.venv/bin/python -m src.evaluate \
+.venv/bin/python -m src.evaluation.evaluate \
   --model-id Qwen/Qwen3-4B-Base \
   --model-mode bf16 \
   --split validation \
@@ -62,7 +62,7 @@ outputs/validation-bf16-smoke-3/
 Use the same command and change only the mode and output directory:
 
 ```bash
-.venv/bin/python -m src.evaluate \
+.venv/bin/python -m src.evaluation.evaluate \
   --model-mode nf4 \
   --split validation \
   --limit 3 \
@@ -73,7 +73,7 @@ Use the same command and change only the mode and output directory:
 ## NF4 Base plus LoRA
 
 ```bash
-.venv/bin/python -m src.evaluate \
+.venv/bin/python -m src.evaluation.evaluate \
   --model-mode lora \
   --adapter-path /path/to/lora-adapter \
   --split validation \

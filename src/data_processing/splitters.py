@@ -7,10 +7,7 @@ from collections import defaultdict
 from statistics import mean, median
 from typing import Iterable, Mapping, Sequence
 
-try:
-    from src.dataset_classifier import TASK_ORDER
-except ModuleNotFoundError:
-    from dataset_classifier import TASK_ORDER
+from .classifier import TASK_ORDER
 
 
 DEFAULT_SEED = 42

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.evaluate import (
+from src.evaluation.evaluate import (
     EvaluationConfig,
     evaluate_records,
     validate_split_access,
@@ -94,7 +94,7 @@ def test_test_split_requires_explicit_opt_in():
 
 def test_evaluation_module_imports_without_model_dependencies():
     code = (
-        "import sys; import src.evaluate; "
+        "import sys; import src.evaluation.evaluate; "
         "assert 'torch' not in sys.modules; "
         "assert 'transformers' not in sys.modules; "
         "assert 'peft' not in sys.modules; "

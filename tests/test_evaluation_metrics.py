@@ -1,6 +1,6 @@
 import json
 
-from src.evaluation_metrics import compute_metrics
+from src.evaluation.metrics import compute_metrics
 
 
 def test_metrics_include_overall_and_per_task_type():

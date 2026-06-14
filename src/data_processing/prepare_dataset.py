@@ -12,30 +12,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Mapping, Sequence
 
-try:
-    from src.dataset_classifier import (
-        ID_RE,
-        TASK_ORDER,
-        classify_record,
-    )
-    from src.dataset_splitters import (
-        DEFAULT_SEED,
-        SPLIT_RATIOS,
-        _build_splits,
-        _length_stats,
-    )
-except ModuleNotFoundError:
-    from dataset_classifier import (
-        ID_RE,
-        TASK_ORDER,
-        classify_record,
-    )
-    from dataset_splitters import (
-        DEFAULT_SEED,
-        SPLIT_RATIOS,
-        _build_splits,
-        _length_stats,
-    )
+from .classifier import ID_RE, TASK_ORDER, classify_record
+from .splitters import DEFAULT_SEED, SPLIT_RATIOS, _build_splits, _length_stats
 
 
 def _fullmatch(pattern: re.Pattern[str], value: str) -> bool:

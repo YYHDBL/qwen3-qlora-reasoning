@@ -12,10 +12,10 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from src.analyze_tokens import read_jsonl, sha256_file
-from src.answer_evaluation import evaluate_answer
-from src.evaluation_metrics import compute_metrics
-from src.prompt_format import format_evaluation_prompt
+from ..common.prompt_format import format_evaluation_prompt
+from .analyze_tokens import read_jsonl, sha256_file
+from .answer_evaluation import evaluate_answer
+from .metrics import compute_metrics
 
 
 MODEL_MODES = ("bf16", "nf4", "lora")

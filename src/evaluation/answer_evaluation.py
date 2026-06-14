@@ -6,7 +6,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from src.dataset_classifier import (
+from ..data_processing.classifier import (
     BINARY_ANSWER_RE,
     GRAVITY_ANSWER_RE,
     ROMAN_RE,
