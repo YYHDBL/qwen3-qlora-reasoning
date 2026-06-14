@@ -30,6 +30,20 @@ def _assistant_mask(rendered: Mapping[str, Any]) -> list[int]:
     return [int(item) for item in value]
 
 
+def _supervised_spans(mask: Sequence[int]) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, value in enumerate(mask):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            spans.append((start, index - 1))
+            start = None
+    if start is not None:
+        spans.append((start, len(mask) - 1))
+    return spans
+
+
 def audit_conversation(
     record: Mapping[str, Any],
     tokenizer: Any,
@@ -55,9 +69,11 @@ def audit_conversation(
 
     original_length = len(input_ids)
     truncated = original_length > max_length
+    original_spans = _supervised_spans(mask)
     input_ids = list(input_ids[:max_length])
     attention_mask = list(attention_mask[:max_length])
     mask = mask[:max_length]
+    truncated_spans = _supervised_spans(mask)
     labels = [
         token_id if assistant else -100
         for token_id, assistant in zip(input_ids, mask, strict=True)
@@ -73,12 +89,21 @@ def audit_conversation(
         )
 
     im_end_id = tokenizer.convert_tokens_to_ids(IM_END_TOKEN)
-    im_end_supervised = supervised_ids[-1] == im_end_id
+    ends_with_supervised_token = bool(mask and mask[-1])
+    if truncated and ends_with_supervised_token:
+        raise ValueError(
+            f"{record.get('id', '<unknown>')} cuts through a supervised "
+            "assistant span; increase max_length or fix the training "
+            "chat template"
+        )
+    im_end_supervised = any(
+        input_ids[end] == im_end_id for _, end in truncated_spans
+    )
     if not im_end_supervised:
         raise ValueError(
-            f"{record.get('id', '<unknown>')} does not supervise the "
-            f"terminating {IM_END_TOKEN}; increase max_length or fix the "
-            "training chat template"
+            f"{record.get('id', '<unknown>')} does not supervise any "
+            f"{IM_END_TOKEN} token; check the training chat template "
+            "or assistant mask semantics"
         )
     return {
         "id": record.get("id"),
@@ -90,6 +115,10 @@ def audit_conversation(
         "supervised_tokens": len(supervised_ids),
         "masked_tokens": len(labels) - len(supervised_ids),
         "truncated": truncated,
+        "supervised_span_count": len(truncated_spans),
+        "supervised_spans": truncated_spans,
+        "original_supervised_span_count": len(original_spans),
+        "ends_with_supervised_token": ends_with_supervised_token,
         "im_end_supervised": im_end_supervised,
         "decoded_sequence": tokenizer.decode(
             input_ids,

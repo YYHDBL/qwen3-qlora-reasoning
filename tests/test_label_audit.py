@@ -24,6 +24,18 @@ class FakeTokenizer:
         return " ".join(str(value) for value in token_ids)
 
 
+class MultiSpanTokenizer(FakeTokenizer):
+    def apply_chat_template(self, messages, **kwargs):
+        assert kwargs["tokenize"] is True
+        assert kwargs["return_dict"] is True
+        assert kwargs["return_assistant_tokens_mask"] is True
+        return {
+            "input_ids": [10, 20, 99, 11, 21, 22, 99],
+            "attention_mask": [1, 1, 1, 1, 1, 1, 1],
+            "assistant_masks": [0, 1, 1, 0, 1, 1, 1],
+        }
+
+
 def conversation():
     return {
         "id": "sample",
@@ -58,5 +70,19 @@ def test_audit_rejects_empty_assistant_mask():
 
 
 def test_audit_rejects_truncation_that_removes_im_end():
-    with pytest.raises(ValueError, match="terminating <\\|im_end\\|>"):
+    with pytest.raises(ValueError, match="cuts through a supervised assistant span"):
         audit_conversation(conversation(), FakeTokenizer(), max_length=5)
+
+
+def test_audit_accepts_multiple_supervised_assistant_spans():
+    result = audit_conversation(conversation(), MultiSpanTokenizer(), max_length=32)
+
+    assert result["supervised_tokens"] == 5
+    assert result["im_end_supervised"] is True
+    assert result["supervised_span_count"] == 2
+    assert result["ends_with_supervised_token"] is True
+
+
+def test_audit_rejects_truncation_inside_supervised_span():
+    with pytest.raises(ValueError, match="cuts through a supervised assistant span"):
+        audit_conversation(conversation(), MultiSpanTokenizer(), max_length=6)

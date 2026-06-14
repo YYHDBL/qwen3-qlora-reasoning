@@ -118,8 +118,8 @@ The command fails if:
 
 - the assistant mask is empty
 - user or system tokens enter the supervised span
-- truncation removes the assistant turn terminator
-- `<|im_end|>` is not the final supervised token
+- truncation cuts through any supervised assistant span
+- no supervised assistant span ends with `<|im_end|>`
 
 It creates `token_report.json` and `batch_audit.json` in the prepared data
 directory.
