@@ -39,6 +39,7 @@ class EvaluationConfig:
     split: str
     data_path: str
     output_dir: str
+    cache_dir: str | None = None
     adapter_path: str | None = None
     model_revision: str | None = None
     adapter_revision: str | None = None
@@ -237,6 +238,8 @@ class HuggingFaceGenerator:
         tokenizer_kwargs: dict[str, Any] = {}
         if config.model_revision:
             tokenizer_kwargs["revision"] = config.model_revision
+        if config.cache_dir:
+            tokenizer_kwargs["cache_dir"] = config.cache_dir
         status(
             f"Loading tokenizer: {config.model_id} "
             "(the first run may download files)"
@@ -258,6 +261,8 @@ class HuggingFaceGenerator:
         }
         if config.model_revision:
             model_kwargs["revision"] = config.model_revision
+        if config.cache_dir:
+            model_kwargs["cache_dir"] = config.cache_dir
         if config.model_mode == "bf16":
             model_kwargs["torch_dtype"] = torch.bfloat16
             load_description = "BF16 Base"
@@ -287,6 +292,8 @@ class HuggingFaceGenerator:
             adapter_kwargs: dict[str, Any] = {}
             if config.adapter_revision:
                 adapter_kwargs["revision"] = config.adapter_revision
+            if config.cache_dir:
+                adapter_kwargs["cache_dir"] = config.cache_dir
             status(f"Loading LoRA adapter: {config.adapter_path}")
             model = PeftModel.from_pretrained(
                 model, config.adapter_path, **adapter_kwargs
@@ -393,6 +400,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-revision")
     parser.add_argument("--adapter-revision")
     parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        help="Store Hugging Face downloads in this directory",
+    )
+    parser.add_argument(
         "--split", choices=("validation", "test"), default="validation"
     )
     parser.add_argument("--data-dir", type=Path, default=Path("data/processed"))
@@ -415,6 +427,7 @@ def main() -> None:
         split=args.split,
         data_path=str(data_path),
         output_dir=str(args.output_dir),
+        cache_dir=str(args.cache_dir) if args.cache_dir else None,
         adapter_path=args.adapter_path,
         model_revision=args.model_revision,
         adapter_revision=args.adapter_revision,

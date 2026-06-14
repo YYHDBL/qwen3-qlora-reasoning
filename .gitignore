@@ -9,3 +9,12 @@ __pycache__/
 .DS_Store
 
 outputs/
+.hf-cache/
+.cache/huggingface/
+models/
+weights/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
