@@ -114,6 +114,10 @@ python -m src.training.label_audit \
   --config configs/stage1_no_robots.yaml
 ```
 
+If your installed `trl` version is too old to patch the published Qwen3 Base
+chat template automatically, the repository now applies a built-in fallback
+for the known `Qwen/Qwen3-4B-Base` template before auditing labels.
+
 The command fails if:
 
 - the assistant mask is empty
