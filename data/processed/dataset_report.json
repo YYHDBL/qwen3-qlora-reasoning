@@ -1,0 +1,211 @@
+{
+  "status": "ok",
+  "classification": {
+    "total": 9500,
+    "unknown": 0,
+    "counts": {
+      "bit_manipulation": 1602,
+      "gravity": 1597,
+      "unit_conversion": 1594,
+      "numeral": 1576,
+      "cipher": 1576,
+      "symbolic_transform": 1555
+    },
+    "unknown_records": [],
+    "basic_validation": {
+      "valid": true,
+      "counts": {},
+      "ids": {}
+    }
+  },
+  "splits": {
+    "train": {
+      "total": 7600,
+      "by_task_type": {
+        "bit_manipulation": 1282,
+        "gravity": 1277,
+        "unit_conversion": 1275,
+        "numeral": 1261,
+        "cipher": 1261,
+        "symbolic_transform": 1244
+      }
+    },
+    "validation": {
+      "total": 950,
+      "by_task_type": {
+        "bit_manipulation": 160,
+        "gravity": 160,
+        "unit_conversion": 159,
+        "numeral": 158,
+        "cipher": 158,
+        "symbolic_transform": 155
+      }
+    },
+    "test": {
+      "total": 950,
+      "by_task_type": {
+        "bit_manipulation": 160,
+        "gravity": 160,
+        "unit_conversion": 160,
+        "numeral": 157,
+        "cipher": 157,
+        "symbolic_transform": 156
+      }
+    }
+  },
+  "character_lengths": {
+    "overall": {
+      "prompt": {
+        "min": 177,
+        "max": 510,
+        "mean": 301.52,
+        "median": 281.0,
+        "p90": 468,
+        "p99": 510
+      },
+      "answer": {
+        "min": 1,
+        "max": 39,
+        "mean": 8.39,
+        "median": 5.0,
+        "p90": 24,
+        "p99": 33
+      }
+    },
+    "by_task_type": {
+      "bit_manipulation": {
+        "prompt": {
+          "min": 447,
+          "max": 510,
+          "mean": 478.57,
+          "median": 489.0,
+          "p90": 510,
+          "p99": 510
+        },
+        "answer": {
+          "min": 8,
+          "max": 8,
+          "mean": 8,
+          "median": 8.0,
+          "p90": 8,
+          "p99": 8
+        }
+      },
+      "gravity": {
+        "prompt": {
+          "min": 280,
+          "max": 357,
+          "mean": 320.26,
+          "median": 319,
+          "p90": 353,
+          "p99": 356
+        },
+        "answer": {
+          "min": 3,
+          "max": 6,
+          "mean": 5.05,
+          "median": 5,
+          "p90": 6,
+          "p99": 6
+        }
+      },
+      "unit_conversion": {
+        "prompt": {
+          "min": 197,
+          "max": 246,
+          "mean": 222.24,
+          "median": 223.0,
+          "p90": 245,
+          "p99": 246
+        },
+        "answer": {
+          "min": 4,
+          "max": 5,
+          "mean": 4.91,
+          "median": 5.0,
+          "p90": 5,
+          "p99": 5
+        }
+      },
+      "numeral": {
+        "prompt": {
+          "min": 199,
+          "max": 241,
+          "mean": 219.13,
+          "median": 219.0,
+          "p90": 233,
+          "p99": 237
+        },
+        "answer": {
+          "min": 1,
+          "max": 8,
+          "mean": 4.03,
+          "median": 4.0,
+          "p90": 6,
+          "p99": 7
+        }
+      },
+      "cipher": {
+        "prompt": {
+          "min": 265,
+          "max": 485,
+          "mean": 370.08,
+          "median": 370.0,
+          "p90": 437,
+          "p99": 471
+        },
+        "answer": {
+          "min": 13,
+          "max": 39,
+          "mean": 25.45,
+          "median": 25.0,
+          "p90": 32,
+          "p99": 36
+        }
+      },
+      "symbolic_transform": {
+        "prompt": {
+          "min": 177,
+          "max": 212,
+          "mean": 195.14,
+          "median": 195,
+          "p90": 208,
+          "p99": 211
+        },
+        "answer": {
+          "min": 1,
+          "max": 4,
+          "mean": 2.94,
+          "median": 3,
+          "p90": 4,
+          "p99": 4
+        }
+      }
+    }
+  },
+  "files": {
+    "raw": {
+      "path": "data/raw/train.csv",
+      "sha256": "d204af160633b638448723a437aa51c0db70fd0b64ff92f6ad6f52e5ac6377fa"
+    },
+    "train": {
+      "path": "data/processed/train.jsonl",
+      "sha256": "d247287c773f35fb2eb0d5f81d1425ab8d5e364577d11d642f21df05344a52c5"
+    },
+    "validation": {
+      "path": "data/processed/validation.jsonl",
+      "sha256": "f108f0f402629a746f3959e53dd8f044a4f0907a305c68360372b2d4f50459db"
+    },
+    "test": {
+      "path": "data/processed/test.jsonl",
+      "sha256": "a1019f85544996d03e11006c28f954ffa13a43690cd8e1be74f3c1032986ff0d"
+    },
+    "split_manifest": {
+      "path": "data/processed/split_manifest.json"
+    }
+  },
+  "token_statistics": {
+    "status": "deferred",
+    "reason": "Token counts must be computed with the Qwen/Qwen3-4B-Base tokenizer."
+  }
+}
