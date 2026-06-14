@@ -56,6 +56,41 @@ training on a 24GB RTX 4090.
 - `data/processed/tokenizer_report.json`
 - `data/processed/tokenizer_report.md`
 
+## Completed: Shared Evaluation Framework
+
+- Added one prompt-format module shared by tokenizer analysis and evaluation.
+- Added task-aware parsing and comparison for:
+  - bit manipulation
+  - gravity
+  - unit conversion
+  - numeral conversion
+  - cipher text
+  - symbolic transformation
+- Numeric comparisons use `Decimal`, never `float`.
+- Symbolic answers are preserved exactly.
+- Metrics include overall and per-task parse, format, primary, strict, and
+  normalized accuracy.
+- Added one evaluation entry point for:
+  - BF16 Base
+  - NF4 4-bit Base
+  - NF4 4-bit Base plus LoRA
+- Evaluation outputs:
+  - `predictions.jsonl`
+  - `error_cases.jsonl`
+  - `metrics.json`
+  - `run_config.json`
+- Model libraries are delayed imports, so local unit tests require no GPU.
+- The protected test split requires explicit `--allow-test`.
+
+### Server Preparation
+
+- `requirements.txt`
+- `requirements-dev.txt`
+- `requirements-gpu.txt`
+- `docs/SERVER_EVALUATION.md`
+
 ## Current Stop Point
 
-Tokenizer analysis is complete. Base model evaluation has not started.
+The evaluation framework is ready for a three-sample validation smoke run on
+the GPU server. No model weights were downloaded and no model inference or
+QLoRA training was run during this stage.

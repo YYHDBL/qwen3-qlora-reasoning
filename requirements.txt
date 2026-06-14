@@ -1,0 +1,2 @@
+transformers>=4.51.0,<6
+safetensors>=0.5.0

@@ -13,6 +13,8 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any, Iterable, Mapping, Sequence
 
+from src.prompt_format import format_training_text
+
 
 SPLITS = ("train", "validation", "test")
 REQUIRED_FIELDS = ("id", "task_type", "prompt", "answer")
@@ -100,23 +102,6 @@ def load_datasets(
             "sha256_before": sha256_file(path),
         }
     return records, input_files
-
-
-def format_training_text(
-    prompt: str,
-    answer: str,
-    eos_token: str,
-) -> tuple[str, str, str]:
-    """
-    Return the prompt, answer, and full text for the candidate SFT format.
-
-    The source prompt and answer are used verbatim.
-    """
-    if not eos_token:
-        raise ValueError("tokenizer EOS token is required")
-    prompt_text = f"{prompt}\n\nAnswer:\n"
-    answer_text = f"{answer}{eos_token}"
-    return prompt_text, answer_text, prompt_text + answer_text
 
 
 def _token_count(tokenizer: Any, text: str) -> int:
