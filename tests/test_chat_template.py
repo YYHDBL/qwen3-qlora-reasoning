@@ -76,3 +76,12 @@ def test_configure_training_chat_template_rejects_unknown_template():
             configure_training_chat_template(tokenizer)
     finally:
         uninstall_fake_trl()
+
+
+def test_configure_training_chat_template_falls_back_when_trl_missing():
+    tokenizer = FakeTokenizer(QWEN3_BASE_CHAT_TEMPLATE)
+    uninstall_fake_trl()
+
+    result = configure_training_chat_template(tokenizer)
+
+    assert result == QWEN3_TRAINING_CHAT_TEMPLATE

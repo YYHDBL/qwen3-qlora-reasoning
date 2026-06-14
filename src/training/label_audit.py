@@ -44,6 +44,29 @@ def _supervised_spans(mask: Sequence[int]) -> list[tuple[int, int]]:
     return spans
 
 
+def _span_boundary_checks(
+    original_spans: Sequence[tuple[int, int]],
+    truncated_spans: Sequence[tuple[int, int]],
+    input_ids: Sequence[int],
+    im_end_id: int,
+) -> tuple[bool, bool]:
+    """Validate that spans are not cut and that each ends before <|im_end|>."""
+    if len(truncated_spans) > len(original_spans):
+        raise ValueError("tokenizer returned inconsistent assistant spans")
+    for index, (start, end) in enumerate(truncated_spans):
+        original_start, original_end = original_spans[index]
+        if start != original_start:
+            raise ValueError("tokenizer changed assistant span alignment")
+        if end < original_end:
+            return False, False
+        if input_ids[end] == im_end_id:
+            continue
+        boundary_index = end + 1
+        if boundary_index >= len(input_ids) or input_ids[boundary_index] != im_end_id:
+            return True, False
+    return True, True
+
+
 def audit_conversation(
     record: Mapping[str, Any],
     tokenizer: Any,
@@ -90,20 +113,24 @@ def audit_conversation(
 
     im_end_id = tokenizer.convert_tokens_to_ids(IM_END_TOKEN)
     ends_with_supervised_token = bool(mask and mask[-1])
-    if truncated and ends_with_supervised_token:
+    spans_complete, im_end_follows_supervised_span = _span_boundary_checks(
+        original_spans,
+        truncated_spans,
+        input_ids,
+        im_end_id,
+    )
+    if not spans_complete:
         raise ValueError(
             f"{record.get('id', '<unknown>')} cuts through a supervised "
             "assistant span; increase max_length or fix the training "
             "chat template"
         )
-    im_end_supervised = any(
-        input_ids[end] == im_end_id for _, end in truncated_spans
-    )
-    if not im_end_supervised:
+    im_end_supervised = any(input_ids[end] == im_end_id for _, end in truncated_spans)
+    if not im_end_follows_supervised_span:
         raise ValueError(
-            f"{record.get('id', '<unknown>')} does not supervise any "
-            f"{IM_END_TOKEN} token; check the training chat template "
-            "or assistant mask semantics"
+            f"{record.get('id', '<unknown>')} is missing the terminating "
+            f"{IM_END_TOKEN} boundary after a supervised assistant span; "
+            "increase max_length or check the training chat template"
         )
     return {
         "id": record.get("id"),
@@ -120,6 +147,7 @@ def audit_conversation(
         "original_supervised_span_count": len(original_spans),
         "ends_with_supervised_token": ends_with_supervised_token,
         "im_end_supervised": im_end_supervised,
+        "im_end_follows_supervised_span": im_end_follows_supervised_span,
         "decoded_sequence": tokenizer.decode(
             input_ids,
             skip_special_tokens=False,
@@ -200,25 +228,26 @@ def build_audit_reports(
     batch_rows = [
         row for split in ("train", "validation") for row in audited_by_split[split][:4]
     ]
-    batch_audit = {
-        "status": "passed",
-        "checks": {
-            "assistant_mask_nonempty": all(
-                int(row["supervised_tokens"]) > 0 for row in batch_rows
-            ),
-            "non_assistant_labels_are_minus_100": all(
-                all(
-                    label == -100 or label == token_id
-                    for token_id, label in zip(
-                        row["input_ids"], row["labels"], strict=True
-                    )
+    batch_checks = {
+        "assistant_mask_nonempty": all(
+            int(row["supervised_tokens"]) > 0 for row in batch_rows
+        ),
+        "non_assistant_labels_are_minus_100": all(
+            all(
+                label == -100 or label == token_id
+                for token_id, label in zip(
+                    row["input_ids"], row["labels"], strict=True
                 )
-                for row in batch_rows
-            ),
-            "im_end_supervised": all(
-                bool(row["im_end_supervised"]) for row in batch_rows
-            ),
-        },
+            )
+            for row in batch_rows
+        ),
+        "im_end_boundaries_present": all(
+            bool(row["im_end_follows_supervised_span"]) for row in batch_rows
+        ),
+    }
+    batch_audit = {
+        "status": "passed" if all(batch_checks.values()) else "failed",
+        "checks": batch_checks,
         "samples": list(batch_rows),
     }
     return token_report, batch_audit

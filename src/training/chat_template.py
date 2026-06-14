@@ -212,7 +212,7 @@ def configure_training_chat_template(tokenizer: Any) -> str:
         from trl.chat_template_utils import get_training_chat_template
 
         template = get_training_chat_template(processing_class=tokenizer)
-    except ValueError as exc:
+    except (ValueError, ModuleNotFoundError, ImportError) as exc:
         template = _fallback_training_template(tokenizer, exc)
         if template is None:
             raise ValueError(
