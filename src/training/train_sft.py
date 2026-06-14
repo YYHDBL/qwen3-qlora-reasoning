@@ -128,6 +128,30 @@ def snapshot_data_artifacts(config: Mapping[str, Any], output_dir: Path) -> None
         )
 
 
+def load_audit_exclusions(
+    data_dir: Path,
+    expected_max_length: int,
+) -> dict[str, set[str]]:
+    report_path = data_dir / "token_report.json"
+    if not report_path.is_file():
+        raise FileNotFoundError(f"token audit report is missing: {report_path}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    audited_max_length = report.get("max_length")
+    if audited_max_length != expected_max_length:
+        raise ValueError(
+            "token audit max_length does not match training config: "
+            f"report={audited_max_length}, config={expected_max_length}; "
+            "rerun src.training.label_audit"
+        )
+    splits = report.get("splits")
+    if not isinstance(splits, Mapping):
+        raise ValueError("token audit report is missing split statistics")
+    return {
+        split: set(splits.get(split, {}).get("excluded_ids", []))
+        for split in ("train", "validation")
+    }
+
+
 def _validate_formal_gates(config: Mapping[str, Any]) -> None:
     data_dir = Path(config["data"]["output_dir"])
     output_root = Path(config["experiment"]["output_root"])
@@ -187,10 +211,35 @@ def run_training(
         "json",
         data_files={key: str(path) for key, path in data_paths.items()},
     )
-    train_dataset = _select_dataset(dataset["train"], limits["example_limit"])
+    exclusions = load_audit_exclusions(
+        data_dir,
+        expected_max_length=int(config["training"]["max_length"]),
+    )
+    filtered_dataset = {}
+    for split in ("train", "validation"):
+        split_dataset = dataset[split]
+        excluded_ids = exclusions[split]
+        if excluded_ids:
+            split_dataset = split_dataset.filter(
+                lambda row: row["id"] not in excluded_ids,
+                desc=f"Excluding {split} records above max_length",
+            )
+        filtered_dataset[split] = split_dataset
+        status(
+            f"{split}: retained {len(split_dataset)}/{len(dataset[split])} "
+            f"records after token audit"
+        )
+
+    train_dataset = _select_dataset(
+        filtered_dataset["train"],
+        limits["example_limit"],
+    )
     eval_dataset = _select_dataset(
-        dataset["validation"],
-        min(len(dataset["validation"]), limits["example_limit"] or 128),
+        filtered_dataset["validation"],
+        min(
+            len(filtered_dataset["validation"]),
+            limits["example_limit"] or 128,
+        ),
     )
 
     tokenizer = load_tokenizer(config, for_training=True)

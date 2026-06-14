@@ -122,15 +122,20 @@ The command fails if:
 
 - the assistant mask is empty
 - user or system tokens enter the supervised span
-- truncation cuts through any supervised assistant span
-- no supervised assistant span ends with `<|im_end|>`
+- the full assistant span has no `<|im_end|>` terminator
+- the training Chat Template produces inconsistent token or mask lengths
 
 It creates `token_report.json` and `batch_audit.json` in the prepared data
-directory.
+directory. Records whose complete rendered sequence exceeds the configured
+`max_length` are listed under each split's `excluded_ids`; this is a data
+length condition, not a Chat Template failure. All training modes read the
+same report and remove those records before selecting overfit, smoke, or
+formal subsets.
 
 `<|endoftext|>` remains the tokenizer EOS/PAD token. `<|im_end|>` terminates
-Qwen3 chat messages and is included in assistant labels. Generation accepts
-both IDs as stopping tokens.
+Qwen3 chat messages. Depending on the compatible training template, it may
+be inside the assistant mask or immediately follow it; the audit accepts
+both valid forms. Generation accepts both IDs as stopping tokens.
 
 ## 7. Evaluate The Unmodified Base On Instruction Dev
 

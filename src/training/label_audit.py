@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -45,41 +46,18 @@ def _supervised_spans(mask: Sequence[int]) -> list[tuple[int, int]]:
 
 
 def _span_boundary_checks(
-    original_spans: Sequence[tuple[int, int]],
-    truncated_spans: Sequence[tuple[int, int]],
-    original_input_ids: Sequence[int],
-    truncated_length: int,
+    spans: Sequence[tuple[int, int]],
+    input_ids: Sequence[int],
     im_end_id: int,
-) -> tuple[bool, bool]:
-    """Validate that each retained assistant span includes its terminator."""
-    if len(truncated_spans) > len(original_spans):
-        raise ValueError("tokenizer returned inconsistent assistant spans")
-    for index, (start, end) in enumerate(truncated_spans):
-        original_start, original_end = original_spans[index]
-        if start != original_start:
-            raise ValueError("tokenizer changed assistant span alignment")
-
-        boundary_candidates = [
-            token_index
-            for token_index in range(original_start, original_end + 1)
-            if original_input_ids[token_index] == im_end_id
-        ]
-        boundary_index = original_end + 1
-        if (
-            boundary_index < len(original_input_ids)
-            and original_input_ids[boundary_index] == im_end_id
-        ):
-            boundary_candidates.append(boundary_index)
-        if not boundary_candidates:
-            return end >= original_end, False
-
-        expected_boundary = boundary_candidates[-1]
-        if expected_boundary < truncated_length:
+) -> bool:
+    """Return whether every full assistant span has an <|im_end|> terminator."""
+    for start, end in spans:
+        if im_end_id in input_ids[start : end + 1]:
             continue
-        if end < original_end:
-            return False, False
-        return True, False
-    return True, True
+        boundary_index = end + 1
+        if boundary_index >= len(input_ids) or input_ids[boundary_index] != im_end_id:
+            return False
+    return True
 
 
 def audit_conversation(
@@ -106,13 +84,39 @@ def audit_conversation(
         raise ValueError("tokenizer returned inconsistent mask lengths")
 
     original_input_ids = list(input_ids)
+    original_attention_mask = list(attention_mask)
+    original_mask = list(mask)
     original_length = len(original_input_ids)
+    original_spans = _supervised_spans(original_mask)
+    original_supervised_tokens = sum(bool(value) for value in original_mask)
+    if not original_supervised_tokens:
+        raise ValueError(
+            f"{record.get('id', '<unknown>')} has no supervised assistant tokens"
+        )
+
+    im_end_id = tokenizer.convert_tokens_to_ids(IM_END_TOKEN)
+    im_end_follows_supervised_span = _span_boundary_checks(
+        original_spans,
+        original_input_ids,
+        im_end_id,
+    )
+    if not im_end_follows_supervised_span:
+        raise ValueError(
+            f"{record.get('id', '<unknown>')} is missing the terminating "
+            f"{IM_END_TOKEN} boundary after a supervised assistant span; "
+            "check the training chat template"
+        )
+
     truncated = original_length > max_length
-    original_spans = _supervised_spans(mask)
-    input_ids = list(input_ids[:max_length])
-    attention_mask = list(attention_mask[:max_length])
-    mask = mask[:max_length]
-    truncated_spans = _supervised_spans(mask)
+    eligible_for_training = not truncated
+    exclusion_reason = "sequence_exceeds_max_length" if truncated else None
+    truncates_supervised_span = any(
+        start < max_length <= end for start, end in original_spans
+    )
+    input_ids = original_input_ids[:max_length]
+    attention_mask = original_attention_mask[:max_length]
+    mask = original_mask[:max_length]
+    retained_spans = _supervised_spans(mask)
     labels = [
         token_id if assistant else -100
         for token_id, assistant in zip(input_ids, mask, strict=True)
@@ -122,36 +126,12 @@ def audit_conversation(
         for token_id, label in zip(input_ids, labels, strict=True)
         if label != -100
     ]
-    if not supervised_ids:
-        raise ValueError(
-            f"{record.get('id', '<unknown>')} has no supervised assistant tokens"
-        )
 
-    im_end_id = tokenizer.convert_tokens_to_ids(IM_END_TOKEN)
     ends_with_supervised_token = bool(mask and mask[-1])
-    spans_complete, im_end_follows_supervised_span = _span_boundary_checks(
-        original_spans,
-        truncated_spans,
-        original_input_ids,
-        len(input_ids),
-        im_end_id,
-    )
-    if not spans_complete:
-        raise ValueError(
-            f"{record.get('id', '<unknown>')} cuts through a supervised "
-            "assistant span; increase max_length or fix the training "
-            "chat template"
-        )
     im_end_supervised = any(
         token_id == im_end_id and assistant
         for token_id, assistant in zip(input_ids, mask, strict=True)
     )
-    if not im_end_follows_supervised_span:
-        raise ValueError(
-            f"{record.get('id', '<unknown>')} is missing the terminating "
-            f"{IM_END_TOKEN} boundary after a supervised assistant span; "
-            "increase max_length or check the training chat template"
-        )
     return {
         "id": record.get("id"),
         "input_ids": input_ids,
@@ -160,10 +140,14 @@ def audit_conversation(
         "original_tokens": original_length,
         "sequence_tokens": len(input_ids),
         "supervised_tokens": len(supervised_ids),
+        "original_supervised_tokens": original_supervised_tokens,
         "masked_tokens": len(labels) - len(supervised_ids),
         "truncated": truncated,
-        "supervised_span_count": len(truncated_spans),
-        "supervised_spans": truncated_spans,
+        "eligible_for_training": eligible_for_training,
+        "exclusion_reason": exclusion_reason,
+        "truncates_supervised_span": truncates_supervised_span,
+        "supervised_span_count": len(retained_spans),
+        "supervised_spans": retained_spans,
         "original_supervised_span_count": len(original_spans),
         "ends_with_supervised_token": ends_with_supervised_token,
         "im_end_supervised": im_end_supervised,
@@ -211,9 +195,11 @@ def build_audit_reports(
     input_paths: Mapping[str, Path],
     model_id: str,
     tokenizer: Any,
+    max_length: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     token_report = {
         "model_id": model_id,
+        "max_length": max_length,
         "tokenizer_class": tokenizer.__class__.__name__,
         "eos_token": tokenizer.eos_token,
         "eos_token_id": tokenizer.eos_token_id,
@@ -231,6 +217,29 @@ def build_audit_reports(
         "splits": {
             split: {
                 "count": len(rows),
+                "eligible_count": sum(
+                    bool(row["eligible_for_training"]) for row in rows
+                ),
+                "excluded_count": sum(
+                    not bool(row["eligible_for_training"]) for row in rows
+                ),
+                "excluded_ids": [
+                    row["id"]
+                    for row in rows
+                    if not bool(row["eligible_for_training"])
+                ],
+                "exclusion_reasons": dict(
+                    sorted(
+                        Counter(
+                            str(row["exclusion_reason"])
+                            for row in rows
+                            if row["exclusion_reason"] is not None
+                        ).items()
+                    )
+                ),
+                "original_tokens": summarize_values(
+                    [int(row["original_tokens"]) for row in rows]
+                ),
                 "sequence_tokens": summarize_values(
                     [int(row["sequence_tokens"]) for row in rows]
                 ),
@@ -246,7 +255,13 @@ def build_audit_reports(
         },
     }
     batch_rows = [
-        row for split in ("train", "validation") for row in audited_by_split[split][:4]
+        row
+        for split in ("train", "validation")
+        for row in [
+            item
+            for item in audited_by_split[split]
+            if bool(item["eligible_for_training"])
+        ][:4]
     ]
     batch_checks = {
         "assistant_mask_nonempty": all(
@@ -298,15 +313,22 @@ def run_label_audit(config: Mapping[str, Any]) -> None:
         )
         for split, path in input_paths.items()
     }
+    max_length = int(config["training"]["max_length"])
     token_report, batch_audit = build_audit_reports(
-        audited, input_paths, model["id"], tokenizer
+        audited,
+        input_paths,
+        model["id"],
+        tokenizer,
+        max_length,
     )
     write_json(data_dir / "token_report.json", token_report)
     write_json(data_dir / "batch_audit.json", batch_audit)
     print(
         "Assistant-only label audit passed: "
-        f"train={len(audited['train'])}, "
-        f"validation={len(audited['validation'])}"
+        f"train={len(audited['train'])} "
+        f"(excluded={token_report['splits']['train']['excluded_count']}), "
+        f"validation={len(audited['validation'])} "
+        f"(excluded={token_report['splits']['validation']['excluded_count']})"
     )
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from src.training.train_sft import (
     build_sft_kwargs,
+    load_audit_exclusions,
     resolve_run_limits,
     snapshot_data_artifacts,
     validate_preflight_artifacts,
@@ -138,3 +139,37 @@ def test_training_run_snapshots_data_audit_artifacts(tmp_path):
         "token_report.json",
         "batch_audit.json",
     }
+
+
+def test_training_loads_split_exclusions_from_matching_token_report(tmp_path):
+    report_path = tmp_path / "token_report.json"
+    report_path.write_text(
+        """
+{
+  "max_length": 2048,
+  "splits": {
+    "train": {"excluded_ids": ["train-00612"]},
+    "validation": {"excluded_ids": ["test-00007"]}
+  }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exclusions = load_audit_exclusions(tmp_path, expected_max_length=2048)
+
+    assert exclusions == {
+        "train": {"train-00612"},
+        "validation": {"test-00007"},
+    }
+
+
+def test_training_rejects_token_report_for_different_max_length(tmp_path):
+    (tmp_path / "token_report.json").write_text(
+        '{"max_length": 4096, "splits": {}}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="max_length"):
+        load_audit_exclusions(tmp_path, expected_max_length=2048)

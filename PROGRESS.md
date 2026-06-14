@@ -117,8 +117,11 @@ training on a 24GB RTX 4090.
 - The frozen instruction test split requires explicit opt-in and does not
   emit individual error cases by default.
 - Added TRL's training-compatible Qwen3 Chat Template integration.
-- Added assistant-only label audits that require the trailing
-  `<|im_end|>` token to remain supervised after truncation.
+- Added assistant-only label audits that validate the full Qwen3 assistant
+  mask and `<|im_end|>` boundaries independently from sequence length.
+- Records above the configured Stage 1 `max_length` are reported with stable
+  IDs and automatically excluded by every training mode, preventing partial
+  assistant answers from entering SFT.
 - Added shared BF16 Base and LoRA loading with delayed GPU imports.
 - Added overfit, smoke, and formal SFT modes with independent output
   directories.

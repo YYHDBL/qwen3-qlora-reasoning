@@ -64,6 +64,18 @@ class MultiSpanTokenizer(FakeTokenizer):
         }
 
 
+class MissingBoundaryTokenizer(FakeTokenizer):
+    def apply_chat_template(self, messages, **kwargs):
+        assert kwargs["tokenize"] is True
+        assert kwargs["return_dict"] is True
+        assert kwargs["return_assistant_tokens_mask"] is True
+        return {
+            "input_ids": [10, 20, 21],
+            "attention_mask": [1, 1, 1],
+            "assistant_masks": [0, 1, 1],
+        }
+
+
 def conversation():
     return {
         "id": "sample",
@@ -115,6 +127,8 @@ def test_audit_accepts_truncation_after_supervised_im_end():
     assert result["truncated"] is True
     assert result["im_end_supervised"] is True
     assert result["im_end_follows_supervised_span"] is True
+    assert result["eligible_for_training"] is False
+    assert result["exclusion_reason"] == "sequence_exceeds_max_length"
 
 
 def test_audit_rejects_empty_assistant_mask():
@@ -131,9 +145,15 @@ def test_audit_rejects_empty_assistant_mask():
         audit_conversation(conversation(), tokenizer, max_length=32)
 
 
-def test_audit_rejects_truncation_that_removes_im_end():
-    with pytest.raises(ValueError, match="terminating <\\|im_end\\|> boundary"):
-        audit_conversation(conversation(), BoundaryTokenizer(), max_length=3)
+def test_audit_excludes_truncation_that_removes_im_end():
+    result = audit_conversation(
+        conversation(),
+        BoundaryTokenizer(),
+        max_length=3,
+    )
+
+    assert result["eligible_for_training"] is False
+    assert result["exclusion_reason"] == "sequence_exceeds_max_length"
 
 
 def test_audit_accepts_multiple_supervised_assistant_spans():
@@ -146,14 +166,24 @@ def test_audit_accepts_multiple_supervised_assistant_spans():
     assert result["ends_with_supervised_token"] is False
 
 
-def test_audit_rejects_truncation_inside_supervised_span():
-    with pytest.raises(ValueError, match="cuts through a supervised assistant span"):
-        audit_conversation(conversation(), MultiSpanTokenizer(), max_length=6)
+def test_audit_excludes_truncation_inside_supervised_span():
+    result = audit_conversation(
+        conversation(),
+        MultiSpanTokenizer(),
+        max_length=6,
+    )
+
+    assert result["eligible_for_training"] is False
+    assert result["truncates_supervised_span"] is True
 
 
-def test_audit_rejects_missing_im_end_boundary_after_complete_span():
+def test_audit_rejects_full_sequence_without_im_end_boundary():
     with pytest.raises(ValueError, match="terminating <\\|im_end\\|> boundary"):
-        audit_conversation(conversation(), MultiSpanTokenizer(), max_length=7)
+        audit_conversation(
+            conversation(),
+            MissingBoundaryTokenizer(),
+            max_length=32,
+        )
 
 
 def test_batch_audit_uses_im_end_boundary_check_not_im_end_supervision(tmp_path):
@@ -167,8 +197,42 @@ def test_batch_audit_uses_im_end_boundary_check_not_im_end_supervision(tmp_path)
         input_paths={"train": train_path, "validation": validation_path},
         model_id="Qwen/Qwen3-4B-Base",
         tokenizer=BoundaryTokenizer(),
+        max_length=32,
     )
 
     assert token_report["im_end_token"] == "<|im_end|>"
+    assert token_report["max_length"] == 32
     assert batch_audit["status"] == "passed"
     assert batch_audit["checks"]["im_end_boundaries_present"] is True
+
+
+def test_token_report_lists_records_excluded_by_max_length(tmp_path):
+    eligible = audit_conversation(conversation(), FakeTokenizer(), max_length=6)
+    excluded = audit_conversation(
+        {**conversation(), "id": "too-long"},
+        MultiSpanTokenizer(),
+        max_length=6,
+    )
+    train_path = tmp_path / "train.jsonl"
+    validation_path = tmp_path / "validation.jsonl"
+    train_path.write_text("{}\n", encoding="utf-8")
+    validation_path.write_text("{}\n", encoding="utf-8")
+
+    token_report, _ = build_audit_reports(
+        audited_by_split={
+            "train": [eligible, excluded],
+            "validation": [eligible],
+        },
+        input_paths={"train": train_path, "validation": validation_path},
+        model_id="Qwen/Qwen3-4B-Base",
+        tokenizer=FakeTokenizer(),
+        max_length=6,
+    )
+
+    train_report = token_report["splits"]["train"]
+    assert train_report["eligible_count"] == 1
+    assert train_report["excluded_count"] == 1
+    assert train_report["excluded_ids"] == ["too-long"]
+    assert train_report["exclusion_reasons"] == {
+        "sequence_exceeds_max_length": 1
+    }
