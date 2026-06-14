@@ -40,6 +40,18 @@ class BoundaryTokenizer(FakeTokenizer):
         }
 
 
+class SupervisedTrailingNewlineTokenizer(FakeTokenizer):
+    def apply_chat_template(self, messages, **kwargs):
+        assert kwargs["tokenize"] is True
+        assert kwargs["return_dict"] is True
+        assert kwargs["return_assistant_tokens_mask"] is True
+        return {
+            "input_ids": [10, 20, 21, 99, 198],
+            "attention_mask": [1, 1, 1, 1, 1],
+            "assistant_masks": [0, 1, 1, 1, 1],
+        }
+
+
 class MultiSpanTokenizer(FakeTokenizer):
     def apply_chat_template(self, messages, **kwargs):
         assert kwargs["tokenize"] is True
@@ -77,6 +89,31 @@ def test_audit_accepts_im_end_as_boundary_without_supervising_it():
     assert result["labels"] == [-100, 20, 21, -100]
     assert result["supervised_tokens"] == 2
     assert result["im_end_supervised"] is False
+    assert result["im_end_follows_supervised_span"] is True
+
+
+def test_audit_accepts_supervised_newline_after_im_end():
+    result = audit_conversation(
+        conversation(),
+        SupervisedTrailingNewlineTokenizer(),
+        max_length=32,
+    )
+
+    assert result["labels"] == [-100, 20, 21, 99, 198]
+    assert result["im_end_supervised"] is True
+    assert result["im_end_follows_supervised_span"] is True
+
+
+def test_audit_accepts_truncation_after_supervised_im_end():
+    result = audit_conversation(
+        conversation(),
+        SupervisedTrailingNewlineTokenizer(),
+        max_length=4,
+    )
+
+    assert result["labels"] == [-100, 20, 21, 99]
+    assert result["truncated"] is True
+    assert result["im_end_supervised"] is True
     assert result["im_end_follows_supervised_span"] is True
 
 

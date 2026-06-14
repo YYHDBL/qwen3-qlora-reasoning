@@ -47,23 +47,38 @@ def _supervised_spans(mask: Sequence[int]) -> list[tuple[int, int]]:
 def _span_boundary_checks(
     original_spans: Sequence[tuple[int, int]],
     truncated_spans: Sequence[tuple[int, int]],
-    input_ids: Sequence[int],
+    original_input_ids: Sequence[int],
+    truncated_length: int,
     im_end_id: int,
 ) -> tuple[bool, bool]:
-    """Validate that spans are not cut and that each ends before <|im_end|>."""
+    """Validate that each retained assistant span includes its terminator."""
     if len(truncated_spans) > len(original_spans):
         raise ValueError("tokenizer returned inconsistent assistant spans")
     for index, (start, end) in enumerate(truncated_spans):
         original_start, original_end = original_spans[index]
         if start != original_start:
             raise ValueError("tokenizer changed assistant span alignment")
+
+        boundary_candidates = [
+            token_index
+            for token_index in range(original_start, original_end + 1)
+            if original_input_ids[token_index] == im_end_id
+        ]
+        boundary_index = original_end + 1
+        if (
+            boundary_index < len(original_input_ids)
+            and original_input_ids[boundary_index] == im_end_id
+        ):
+            boundary_candidates.append(boundary_index)
+        if not boundary_candidates:
+            return end >= original_end, False
+
+        expected_boundary = boundary_candidates[-1]
+        if expected_boundary < truncated_length:
+            continue
         if end < original_end:
             return False, False
-        if input_ids[end] == im_end_id:
-            continue
-        boundary_index = end + 1
-        if boundary_index >= len(input_ids) or input_ids[boundary_index] != im_end_id:
-            return True, False
+        return True, False
     return True, True
 
 
@@ -90,7 +105,8 @@ def audit_conversation(
     if not (len(input_ids) == len(attention_mask) == len(mask)):
         raise ValueError("tokenizer returned inconsistent mask lengths")
 
-    original_length = len(input_ids)
+    original_input_ids = list(input_ids)
+    original_length = len(original_input_ids)
     truncated = original_length > max_length
     original_spans = _supervised_spans(mask)
     input_ids = list(input_ids[:max_length])
@@ -116,7 +132,8 @@ def audit_conversation(
     spans_complete, im_end_follows_supervised_span = _span_boundary_checks(
         original_spans,
         truncated_spans,
-        input_ids,
+        original_input_ids,
+        len(input_ids),
         im_end_id,
     )
     if not spans_complete:
@@ -125,7 +142,10 @@ def audit_conversation(
             "assistant span; increase max_length or fix the training "
             "chat template"
         )
-    im_end_supervised = any(input_ids[end] == im_end_id for _, end in truncated_spans)
+    im_end_supervised = any(
+        token_id == im_end_id and assistant
+        for token_id, assistant in zip(input_ids, mask, strict=True)
+    )
     if not im_end_follows_supervised_span:
         raise ValueError(
             f"{record.get('id', '<unknown>')} is missing the terminating "
