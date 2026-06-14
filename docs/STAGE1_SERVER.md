@@ -46,6 +46,18 @@ export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME=/path/with/at/least/40GB/huggingface
 ```
 
+The endpoint and proxy variables must include a protocol. For example:
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+export HTTPS_PROXY=http://127.0.0.1:7890
+```
+
+Do not use values such as `HF_ENDPOINT=hf-mirror.com` or
+`HTTPS_PROXY=127.0.0.1:7890`. The preparation command validates these
+variables before making a network request and prints the endpoint, cache,
+download stage, split sizes, validation progress, and output paths.
+
 Do not store an access token in repository files:
 
 ```bash
@@ -77,6 +89,21 @@ data/instruction/stage1/
 ├── dataset_manifest.json
 └── dataset_report.json
 ```
+
+The official dataset contains a few valid edge cases that are preserved
+without rewriting:
+
+- consecutive assistant messages
+- one duplicated `prompt_id` value across two different conversations
+- one empty leading system message
+
+Prepared records therefore use a stable split row ID such as `train-00487`
+and retain the original value separately as `prompt_id`. Counts for these
+edge cases are written to `dataset_report.json`.
+
+If a previous run downloaded the dataset and then failed validation, rerun
+the same command after updating the repository. Hugging Face reuses the
+cached Parquet files.
 
 ## 6. Audit Tokens And Assistant-Only Labels
 

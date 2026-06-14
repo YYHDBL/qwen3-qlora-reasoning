@@ -103,9 +103,12 @@ training on a 24GB RTX 4090.
 - Added the fixed `configs/stage1_no_robots.yaml` experiment configuration.
 - Added official No Robots `train` and `test` preparation with:
   - exact `messages` preservation
-  - role-order and field validation
+  - schema validation that preserves official consecutive assistant turns
+    and the empty leading system-message edge case
+  - stable split row IDs while preserving non-unique source `prompt_id`
   - resolved Hub revision and Arrow fingerprints
   - deterministic JSONL hashes and manifests
+  - Hub endpoint/proxy validation and visible download/validation progress
 - Added separate repository-owned instruction evaluation sets:
   - `data/eval/instruction_dev.jsonl`
   - `data/eval/instruction_test.jsonl`
