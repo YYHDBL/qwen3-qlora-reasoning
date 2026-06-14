@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
@@ -21,6 +23,13 @@ from .metrics import compute_metrics
 MODEL_MODES = ("bf16", "nf4", "lora")
 DEFAULT_MODEL_ID = "Qwen/Qwen3-4B-Base"
 DEFAULT_MAX_LENGTH = 512
+StatusCallback = Callable[[str], None]
+ProgressCallback = Callable[[int, int], None]
+
+
+def console_status(message: str) -> None:
+    timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    print(f"[{timestamp}] [evaluate] {message}", file=sys.stderr, flush=True)
 
 
 @dataclass(frozen=True)
@@ -72,6 +81,7 @@ def evaluate_records(
     records: Sequence[Mapping[str, str]],
     generate: Callable[[Sequence[str]], Sequence[str]],
     batch_size: int,
+    progress: ProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
     if not records:
         raise ValueError("cannot evaluate empty records")
@@ -105,6 +115,8 @@ def evaluate_records(
                     **comparison,
                 }
             )
+        if progress is not None:
+            progress(min(start + len(batch), len(records)), len(records))
     return predictions
 
 
@@ -200,7 +212,12 @@ def build_run_config(
 class HuggingFaceGenerator:
     """Delayed-import generator shared by all supported model modes."""
 
-    def __init__(self, config: EvaluationConfig):
+    def __init__(
+        self,
+        config: EvaluationConfig,
+        status: StatusCallback = console_status,
+    ):
+        status("Importing PyTorch and Transformers")
         import torch
         from transformers import (
             AutoModelForCausalLM,
@@ -208,11 +225,27 @@ class HuggingFaceGenerator:
             BitsAndBytesConfig,
         )
 
+        if torch.cuda.is_available():
+            status(
+                "CUDA available: "
+                f"{torch.cuda.get_device_name(0)} "
+                f"(BF16 supported: {torch.cuda.is_bf16_supported()})"
+            )
+        else:
+            status("CUDA is not available; model loading may fail or be slow")
+
         tokenizer_kwargs: dict[str, Any] = {}
         if config.model_revision:
             tokenizer_kwargs["revision"] = config.model_revision
+        status(
+            f"Loading tokenizer: {config.model_id} "
+            "(the first run may download files)"
+        )
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.model_id, **tokenizer_kwargs
+        )
+        status(
+            f"Tokenizer loaded: {self.tokenizer.__class__.__name__}"
         )
         self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token_id is None:
@@ -227,6 +260,7 @@ class HuggingFaceGenerator:
             model_kwargs["revision"] = config.model_revision
         if config.model_mode == "bf16":
             model_kwargs["torch_dtype"] = torch.bfloat16
+            load_description = "BF16 Base"
         else:
             model_kwargs["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -234,9 +268,18 @@ class HuggingFaceGenerator:
                 bnb_4bit_compute_dtype=torch.bfloat16,
                 bnb_4bit_use_double_quant=True,
             )
+            load_description = "NF4 4-bit Base"
 
+        status(
+            f"Loading model: {config.model_id} as {load_description} "
+            "(this can take several minutes on the first run)"
+        )
+        load_started = time.monotonic()
         model = AutoModelForCausalLM.from_pretrained(
             config.model_id, **model_kwargs
+        )
+        status(
+            f"Base model loaded in {time.monotonic() - load_started:.1f}s"
         )
         if config.model_mode == "lora":
             from peft import PeftModel
@@ -244,9 +287,11 @@ class HuggingFaceGenerator:
             adapter_kwargs: dict[str, Any] = {}
             if config.adapter_revision:
                 adapter_kwargs["revision"] = config.adapter_revision
+            status(f"Loading LoRA adapter: {config.adapter_path}")
             model = PeftModel.from_pretrained(
                 model, config.adapter_path, **adapter_kwargs
             )
+            status("LoRA adapter loaded")
         self.model = model.eval()
         self.torch = torch
         self.max_length = config.max_length
@@ -284,17 +329,35 @@ class HuggingFaceGenerator:
         ]
 
 
-def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
+def run_evaluation(
+    config: EvaluationConfig,
+    status: StatusCallback = console_status,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    status(
+        "Starting evaluation: "
+        f"mode={config.model_mode}, split={config.split}, "
+        f"limit={config.limit or 'all'}, batch_size={config.batch_size}"
+    )
     validate_split_access(config.split, config.allow_test)
     data_path = Path(config.data_path)
+    status(f"Loading dataset: {data_path}")
     dataset_hash_before = sha256_file(data_path)
     records = read_jsonl(data_path, config.split)
     if config.limit is not None:
         records = records[: config.limit]
+    status(f"Loaded {len(records)} {config.split} records")
 
-    generator = HuggingFaceGenerator(config)
+    generator = HuggingFaceGenerator(config, status=status)
+    status("Starting generation")
     predictions = evaluate_records(
-        records, generator, batch_size=config.batch_size
+        records,
+        generator,
+        batch_size=config.batch_size,
+        progress=lambda completed, total: status(
+            f"Generated {completed}/{total} samples "
+            f"({completed / total:.1%})"
+        ),
     )
     dataset_hash_after = sha256_file(data_path)
     if dataset_hash_before != dataset_hash_after:
@@ -306,9 +369,16 @@ def run_evaluation(config: EvaluationConfig) -> dict[str, Any]:
         dataset_hash_after,
         len(records),
     )
-    return write_evaluation_artifacts(
+    status(f"Writing evaluation artifacts: {config.output_dir}")
+    metrics = write_evaluation_artifacts(
         Path(config.output_dir), predictions, run_config
     )
+    status(
+        f"Evaluation complete: {len(records)} samples in "
+        f"{time.monotonic() - started:.1f}s; "
+        f"primary_accuracy={metrics['overall']['primary_accuracy']:.4f}"
+    )
+    return metrics
 
 
 def parse_args() -> argparse.Namespace:

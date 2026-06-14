@@ -8,6 +8,7 @@ import pytest
 from src.evaluation.evaluate import (
     EvaluationConfig,
     evaluate_records,
+    run_evaluation,
     validate_split_access,
     write_evaluation_artifacts,
 )
@@ -120,3 +121,68 @@ def test_lora_mode_requires_adapter_path():
             data_path="data/processed/validation.jsonl",
             output_dir="outputs/run",
         )
+
+
+def test_evaluate_records_reports_batch_progress():
+    records = [
+        make_record("one", "cipher", "one"),
+        make_record("two", "cipher", "two"),
+        make_record("three", "cipher", "three"),
+    ]
+    progress = []
+
+    evaluate_records(
+        records,
+        lambda prompts: [
+            prompt.removeprefix("Prompt for ").removesuffix("\n\nAnswer:")
+            for prompt in prompts
+        ],
+        batch_size=2,
+        progress=lambda completed, total: progress.append(
+            (completed, total)
+        ),
+    )
+
+    assert progress == [(2, 3), (3, 3)]
+
+
+def test_run_evaluation_reports_major_stages(tmp_path, monkeypatch):
+    data_path = tmp_path / "validation.jsonl"
+    data_path.write_text(
+        json.dumps(make_record("one", "cipher", "one")) + "\n",
+        encoding="utf-8",
+    )
+    messages = []
+
+    class FakeGenerator:
+        def __init__(self, config, status):
+            status("Loading tokenizer: fake")
+            status("Loading model: fake")
+
+        def __call__(self, prompts):
+            return ["one" for _ in prompts]
+
+    monkeypatch.setattr(
+        "src.evaluation.evaluate.HuggingFaceGenerator", FakeGenerator
+    )
+    config = EvaluationConfig(
+        model_id="Qwen/Qwen3-4B-Base",
+        model_mode="bf16",
+        split="validation",
+        data_path=str(data_path),
+        output_dir=str(tmp_path / "output"),
+    )
+
+    run_evaluation(config, status=messages.append)
+
+    assert messages[0].startswith("Starting evaluation:")
+    assert any(message.startswith("Loading dataset:") for message in messages)
+    assert "Loaded 1 validation records" in messages
+    assert "Loading tokenizer: fake" in messages
+    assert "Loading model: fake" in messages
+    assert "Generated 1/1 samples (100.0%)" in messages
+    assert any(
+        message.startswith("Writing evaluation artifacts:")
+        for message in messages
+    )
+    assert messages[-1].startswith("Evaluation complete:")
