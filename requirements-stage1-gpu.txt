@@ -1,0 +1,9 @@
+-r requirements.txt
+
+torch>=2.7,<3
+transformers>=5.0,<6
+datasets>=4.0,<6
+peft>=0.18,<1
+trl>=1.6,<2
+accelerate>=1.10,<2
+tensorboard>=2.18,<3

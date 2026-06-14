@@ -98,6 +98,38 @@ training on a 24GB RTX 4090.
 
 ## Current Stop Point
 
-The evaluation framework is ready for a three-sample validation smoke run on
-the GPU server. No model weights were downloaded and no model inference or
-QLoRA training was run during this stage.
+## Implemented: Stage 1 No Robots Infrastructure
+
+- Added the fixed `configs/stage1_no_robots.yaml` experiment configuration.
+- Added official No Robots `train` and `test` preparation with:
+  - exact `messages` preservation
+  - role-order and field validation
+  - resolved Hub revision and Arrow fingerprints
+  - deterministic JSONL hashes and manifests
+- Added separate repository-owned instruction evaluation sets:
+  - `data/eval/instruction_dev.jsonl`
+  - `data/eval/instruction_test.jsonl`
+- Added deterministic exact, regex, JSON, line-count, and contains
+  validators.
+- The frozen instruction test split requires explicit opt-in and does not
+  emit individual error cases by default.
+- Added TRL's training-compatible Qwen3 Chat Template integration.
+- Added assistant-only label audits that require the trailing
+  `<|im_end|>` token to remain supervised after truncation.
+- Added shared BF16 Base and LoRA loading with delayed GPU imports.
+- Added overfit, smoke, and formal SFT modes with independent output
+  directories.
+- Added exact supervised and total training-token counters, peak GPU memory,
+  elapsed time, environment metadata, and Adapter artifacts.
+- Added fresh-process Adapter reload verification.
+- Added `requirements-stage1-gpu.txt` without bitsandbytes while preserving
+  the older NF4 evaluation environment separately.
+- Added Conda server commands in `docs/STAGE1_SERVER.md`.
+
+## Current Stop Point
+
+Stage 1 code is ready for server-side data preparation, label audit, Base dev
+evaluation, sixteen-example overfit, smoke SFT, and Adapter reload. No model
+weights were downloaded and no local inference or training was run. Stop
+after the smoke artifacts are reviewed; do not start the formal one-epoch
+run yet.

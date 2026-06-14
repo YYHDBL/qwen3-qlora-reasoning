@@ -1,0 +1,62 @@
+experiment:
+  name: stage1_no_robots
+  output_root: outputs/stage1_no_robots
+
+model:
+  id: Qwen/Qwen3-4B-Base
+  revision: null
+  tokenizer_revision: null
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: false
+  load_in_8bit: false
+  trust_remote_code: false
+
+data:
+  dataset_id: HuggingFaceH4/no_robots
+  dataset_revision: null
+  train_split: train
+  validation_split: test
+  output_dir: data/instruction/stage1
+
+lora:
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules: all-linear
+  bias: none
+  task_type: CAUSAL_LM
+
+training:
+  max_length: 2048
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 16
+  gradient_checkpointing: true
+  assistant_only_loss: true
+  packing: false
+  learning_rate: 0.0001
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+  optim: adamw_torch_fused
+  logging_steps: 1
+  save_steps: 10
+  eval_steps: 10
+  max_steps: -1
+  num_train_epochs: 1
+  seed: 42
+  bf16: true
+  tf32: true
+  overfit_examples: 16
+  overfit_steps: 40
+  smoke_examples: 256
+  smoke_steps: 20
+
+generation:
+  max_new_tokens: 256
+  do_sample: false
+
+evaluation:
+  dev_path: data/eval/instruction_dev.jsonl
+  test_path: data/eval/instruction_test.jsonl
+  batch_size: 1

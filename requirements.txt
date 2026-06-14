@@ -1,2 +1,2 @@
-transformers>=4.51.0,<6
-safetensors>=0.5.0
+pyyaml>=6.0,<7
+safetensors>=0.5,<1
