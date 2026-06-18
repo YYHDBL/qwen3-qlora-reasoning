@@ -30,6 +30,7 @@ lora:
   target_modules: all-linear
   bias: none
   task_type: CAUSAL_LM
+  modules_to_save: ["lm_head"]
 
 training:
   max_length: 2048

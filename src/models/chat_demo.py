@@ -2,23 +2,34 @@
 
 Usage::
 
-    # Base model (4B from HF hub)
+    # Base model
     python -m src.models.chat_demo --config configs/stage1_no_robots.yaml
 
     # Local 1.7B model
     python -m src.models.chat_demo --config configs/stage1_no_robots_qwen3_1_7b_local.yaml
 
     # With LoRA adapter
-    python -m src.models.chat_demo --config configs/stage1_no_robots.yaml \\
-        --adapter-path outputs/stage1_no_robots/smoke/adapter
+    python -m src.models.chat_demo --config configs/stage1_no_robots_qwen3_1_7b_local.yaml \
+        --adapter-path outputs/stage1_no_robots_qwen3_1_7b_local/formal/adapter
+
+    # Strict short-answer test: greedy decoding
+    python -m src.models.chat_demo --config configs/stage1_no_robots_qwen3_1_7b_local.yaml \
+        --adapter-path outputs/stage1_no_robots_qwen3_1_7b_local/formal/adapter \
+        --max-new-tokens 64 \
+        --temperature 0
+
+    # Open-ended chat: sampling
+    python -m src.models.chat_demo --config configs/stage1_no_robots_qwen3_1_7b_local.yaml \
+        --adapter-path outputs/stage1_no_robots_qwen3_1_7b_local/formal/adapter \
+        --max-new-tokens 256 \
+        --temperature 0.7 \
+        --top-p 0.9
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import random
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -26,13 +37,13 @@ from typing import Any
 import torch
 from transformers import TextStreamer
 
+from src.common.config import load_yaml_config
+from src.training.chat_template import resolve_stop_token_ids
 from src.training.model_loader import (
     load_bf16_model,
     load_lora_model,
     load_tokenizer,
 )
-from src.common.config import load_yaml_config
-from src.training.chat_template import resolve_stop_token_ids
 
 
 AUTO_PROMPTS = [
@@ -41,6 +52,9 @@ AUTO_PROMPTS = [
     ("解释什么是机器学习，用两句话", "knowledge"),
     ("比较一下猫和狗作为宠物的优缺点", "compare"),
     ("请推荐三本值得读的书并简单说明理由", "recommend"),
+    ("Reply with exactly BLUE in uppercase and nothing else.", "strict_exact"),
+    ("Return only valid JSON with key sum and value 7.", "strict_json"),
+    ("Output DONE and stop immediately.", "strict_stop"),
 ]
 
 
@@ -57,8 +71,8 @@ class InteractiveChat:
         config: dict[str, Any],
         adapter_path: str | None = None,
         max_new_tokens: int = 512,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
         open_thinking: bool = False,
     ) -> None:
         self.config = config
@@ -66,14 +80,19 @@ class InteractiveChat:
         self.temperature = temperature
         self.top_p = top_p
         self.open_thinking = open_thinking
+
         self.tokenizer = load_tokenizer(config, for_training=False)
         self.stop_ids = resolve_stop_token_ids(self.tokenizer)
+
         if adapter_path:
             self.model = load_lora_model(
-                config, adapter_path, is_trainable=False
+                config,
+                adapter_path,
+                is_trainable=False,
             ).eval()
         else:
             self.model = load_bf16_model(config).eval()
+
         self.model.config.use_cache = True
 
     def chat(
@@ -82,12 +101,14 @@ class InteractiveChat:
         user_input: str,
     ) -> tuple[str, float]:
         history.append({"role": "user", "content": user_input})
+
         prompt = self.tokenizer.apply_chat_template(
             history,
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=self.open_thinking,
         )
+
         inputs = self.tokenizer(
             prompt,
             return_tensors="pt",
@@ -104,18 +125,24 @@ class InteractiveChat:
             skip_special_tokens=True,
         )
 
+        do_sample = self.temperature > 0
+
+        generation_kwargs: dict[str, Any] = {
+            **inputs,
+            "do_sample": do_sample,
+            "max_new_tokens": self.max_new_tokens,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": list(self.stop_ids.values()),
+            "streamer": streamer,
+        }
+
+        if do_sample:
+            generation_kwargs["temperature"] = self.temperature
+            generation_kwargs["top_p"] = self.top_p
+
         start = time.monotonic()
         with torch.inference_mode():
-            output = self.model.generate(
-                **inputs,
-                do_sample=True,
-                max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=list(self.stop_ids.values()),
-                streamer=streamer,
-            )
+            output = self.model.generate(**generation_kwargs)
         elapsed = time.monotonic() - start
 
         new_tokens = output.shape[1] - prompt_len
@@ -125,14 +152,15 @@ class InteractiveChat:
             output[0][prompt_len:],
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
-        )
+        ).strip()
+
         history.append({"role": "assistant", "content": response})
         return response, tokens_per_sec
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Interactive Qwen3 chat demo (base or LoRA adapter)."
+        description="Interactive Qwen3 chat demo, base or LoRA adapter."
     )
     parser.add_argument(
         "--config",
@@ -150,19 +178,19 @@ def main() -> None:
         "--max-new-tokens",
         type=int,
         default=512,
-        help="Maximum new tokens per response (default: 512).",
+        help="Maximum new tokens per response. Default: 64.",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
-        help="Sampling temperature (default: 0.7).",
+        default=0.0,
+        help="Sampling temperature. 0 means greedy decoding. Default: 0.0.",
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=0.9,
-        help="Nucleus sampling top-p (default: 0.9).",
+        default=1.0,
+        help="Nucleus sampling top-p. Only used when temperature > 0. Default: 1.0.",
     )
     parser.add_argument(
         "--open-thinking",
@@ -173,30 +201,38 @@ def main() -> None:
         "--history",
         type=int,
         default=4,
-        help="Number of past conversation turns to keep (default: 4).",
+        help="Number of past conversation turns to keep. Default: 4.",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Random seed (default: 42).",
+        help="Random seed. Default: 42.",
     )
     args = parser.parse_args()
+
+    _seed_everything(args.seed)
 
     config = load_yaml_config(Path(args.config))
     model_id = config["model"]["id"]
     mode = "LoRA" if args.adapter_path else "Base"
+    decode_mode = "sampling" if args.temperature > 0 else "greedy"
 
     print(f"  Model: {model_id}")
     print(f"  Mode:  {mode}")
     if args.adapter_path:
         print(f"  Adapter: {args.adapter_path}")
-    print(f"  Temp={args.temperature}  top_p={args.top_p}  max_tokens={args.max_new_tokens}")
+    print(
+        f"  Decode={decode_mode}  "
+        f"Temp={args.temperature}  "
+        f"top_p={args.top_p}  "
+        f"max_tokens={args.max_new_tokens}"
+    )
     print(f"  Thinking={'on' if args.open_thinking else 'off'}")
     print()
 
     chat = InteractiveChat(
-        config,
+        config=config,
         adapter_path=args.adapter_path,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
@@ -207,6 +243,7 @@ def main() -> None:
     print("Choose mode:")
     print("  [0] Auto test (preset prompts)")
     print("  [1] Interactive chat")
+
     try:
         mode_choice = input("> ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -214,37 +251,47 @@ def main() -> None:
         return
 
     if mode_choice == "0":
-        _seed_everything(args.seed)
         history: list[dict[str, str]] = []
         for prompt, category in AUTO_PROMPTS:
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"[{category}] 💬: {prompt}")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
             print("🧠: ", end="", flush=True)
+
             _, tps = chat.chat(history, prompt)
             print(f"\n--- {tps:.1f} tokens/s ---")
+
             history = history[-args.history * 2 :]
+
     else:
         history = []
         print("\nType /clear to reset history, /exit to quit.\n")
+
         while True:
             try:
                 user_input = input("💬: ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\nExiting.")
                 break
+
             if not user_input:
                 continue
+
             if user_input == "/exit":
                 break
+
             if user_input == "/clear":
                 history = []
                 print("History cleared.\n")
                 continue
+
             print("🧠: ", end="", flush=True)
+
             _, tps = chat.chat(history, user_input)
             print(f"\n── {tps:.1f} tokens/s ──\n")
+
             history = history[-args.history * 2 :]
+
     print("Done.")
 
 

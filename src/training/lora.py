@@ -37,4 +37,7 @@ def build_lora_config(config: Mapping[str, Any]) -> Any:
         bias=str(value["bias"]),
         # task_type: 任务类型，CAUSAL_LM 对应因果语言模型（自回归生成）
         task_type=task_type,
+        # modules_to_save: 除 LoRA adapter 外需要全量训练的模块
+        # 例如 ["lm_head"] 可解冻 lm_head，使其学习 <|im_end|> 等特殊 token 的预测
+        modules_to_save=value.get("modules_to_save", []),
     )
