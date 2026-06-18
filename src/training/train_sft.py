@@ -174,6 +174,7 @@ def build_sft_kwargs(
         "logging_steps": int(training["logging_steps"]),
         "save_steps": int(training["save_steps"]),
         "eval_steps": int(training["eval_steps"]),
+        "save_total_limit": int(training.get("save_total_limit", 3)),
         # 按 steps 触发评估和保存，而不是 epoch
         "eval_strategy": "steps",
         "save_strategy": "steps",
@@ -284,6 +285,20 @@ def _loss_decreased(log_history: list[Mapping[str, Any]]) -> tuple[bool, Any, An
     # overfit 门控条件：最终 loss < 初始 loss * 0.8（即下降了 20% 以上）
     # 只有 loss 显著下降才说明模型确实在小数据集上"学到"了，而非随机猜测
     return losses[-1] < losses[0] * 0.8, losses[0], losses[-1]
+
+
+def _clean_checkpoints(output_dir: Path, run_mode: str) -> None:
+    # overfit/smoke 完成后删除中间 checkpoint 释放磁盘空间
+    # adapter 权重已保存到 output_dir/adapter/，中间 checkpoint 不再需要
+    # formal 模式由 save_total_limit 控制保留数，不需要手动清理
+    if run_mode not in ("overfit", "smoke"):
+        return
+    ckpt_dir = output_dir / "checkpoints"
+    if not ckpt_dir.is_dir():
+        return
+    import shutil
+
+    shutil.rmtree(ckpt_dir)
 
 
 def run_training(
@@ -513,6 +528,9 @@ def run_training(
         # 未通过则抛异常，阻止后续 smoke/formal 运行
         if not passed:
             raise RuntimeError("overfit gate failed; inspect overfit_passed.json")
+    # overfit/smoke 完成后删除中间 checkpoint，只保留 adapter + metrics
+    # formal 模式由 save_total_limit 控制保留数
+    _clean_checkpoints(output_dir, run_mode)
     # 写入可读的总结 Markdown
     (output_dir / "conclusion.md").write_text(
         "\n".join(

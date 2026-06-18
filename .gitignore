@@ -11,7 +11,8 @@ __pycache__/
 outputs/
 .hf-cache/
 .cache/huggingface/
-models/
+/models/*
+!/models/README.md
 weights/
 *.safetensors
 *.bin

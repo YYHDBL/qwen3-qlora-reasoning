@@ -1,12 +1,12 @@
 experiment:
-  name: stage1_no_robots
-  output_root: outputs/stage1_no_robots
-  swanlab_project: "stage1-no-robots"
+  name: stage1_no_robots_qwen3_1_7b_local
+  output_root: outputs/stage1_no_robots_qwen3_1_7b_local
+  swanlab_project: "stage1-no-robots-qwen3-1.7b"
   swanlab_workspace: yyhdbl
   swanlab_api_key: w5i4zEmPe04Nm4ul9RloZ
 
 model:
-  id: Qwen/Qwen3-4B-Base
+  id: models/Qwen3-1.7B-Base
   revision: null
   tokenizer_revision: null
   cache_dir: .hf-cache/hub

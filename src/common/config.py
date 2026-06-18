@@ -62,8 +62,9 @@ def validate_stage1_config(config: Mapping[str, Any]) -> None:
 
     if not experiment.get("swanlab_project") or not isinstance(experiment.get("swanlab_project"), str):
         raise ValueError("experiment.swanlab_project is required and must be a non-empty string")
-    if model.get("id") != "Qwen/Qwen3-4B-Base":
-        raise ValueError("Stage 1 model must be Qwen/Qwen3-4B-Base")
+    allowed_models = ("Qwen/Qwen3-4B-Base", "models/Qwen3-1.7B-Base")
+    if model.get("id") not in allowed_models:
+        raise ValueError(f"Stage 1 model must be one of: {', '.join(allowed_models)}")
     if model.get("load_in_4bit") or model.get("load_in_8bit"):
         raise ValueError("Stage 1 forbids 4-bit and 8-bit model loading")
     if data.get("dataset_id") != "HuggingFaceH4/no_robots":

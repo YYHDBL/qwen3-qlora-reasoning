@@ -72,6 +72,9 @@ def load_bf16_model(config: Mapping[str, Any]) -> Any:
         #   - 开启后仅需 ~14GB，对于消费级 CPU（32-64GB RAM）至关重要
         #   - 缺点：无法直接从 PyTorch checkpoint 恢复（但这里仅用于加载预训练权重，无此需求）
         "low_cpu_mem_usage": True,
+        # device_map="auto" 自动将模型分层放置到 GPU（单 GPU 则全部放 GPU）
+        # 训练时 SFTTrainer 会接管设备管理，此处传入不影响训练流程
+        "device_map": "auto",
     }
     if model_config.get("revision"):
         kwargs["revision"] = model_config["revision"]
@@ -159,6 +162,7 @@ class ChatGenerator:
             if adapter_path
             else load_bf16_model(config)
         ).eval()
+        self.model.config.use_cache = True
         # 记录 tokenizer 的 commit hash，用于环境追踪（非关键逻辑，仅用于审计）
         self.tokenizer_revision = (
             getattr(self.tokenizer, "init_kwargs", {}) or {}
