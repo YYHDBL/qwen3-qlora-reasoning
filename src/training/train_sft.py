@@ -36,13 +36,6 @@ except ImportError:
 
 
 RUN_MODES = ("overfit", "smoke", "formal")
-PREFLIGHT_FILES = (
-    "dataset_manifest.json",
-    "token_report.json",
-    "batch_audit.json",
-    "overfit_passed.json",
-    "adapter_reload.json",
-)
 
 
 def resolve_run_limits(run_mode: str, training: Mapping[str, Any]) -> dict[str, Any]:
@@ -201,14 +194,6 @@ def build_sft_kwargs(
     return kwargs
 
 
-def validate_preflight_artifacts(path: Path) -> None:
-    missing = [name for name in PREFLIGHT_FILES if not (path / name).is_file()]
-    if missing:
-        raise FileNotFoundError(
-            "formal training preflight artifacts are missing: " + ", ".join(missing)
-        )
-
-
 def snapshot_data_artifacts(config: Mapping[str, Any], output_dir: Path) -> None:
     data_dir = Path(config["data"]["output_dir"])
     for name in (
@@ -265,6 +250,22 @@ def _validate_formal_gates(config: Mapping[str, Any]) -> None:
     if missing:
         raise FileNotFoundError(
             "formal training preflight artifacts are missing: " + ", ".join(missing)
+        )
+    overfit = json.loads(
+        (output_root / "overfit" / "overfit_passed.json").read_text(encoding="utf-8")
+    )
+    if not overfit.get("passed"):
+        raise RuntimeError(
+            "overfit gate not passed; inspect overfit_passed.json"
+        )
+    reload_result = json.loads(
+        (output_root / "smoke" / "adapter_reload.json").read_text(encoding="utf-8")
+    )
+    if not reload_result.get("passed"):
+        raise RuntimeError(
+            f"adapter reload gate not passed (stop_reason={reload_result.get('stop_reason')}, "
+            f"generated_tokens={reload_result.get('generated_tokens')}); "
+            "inspect adapter_reload.json"
         )
 
 

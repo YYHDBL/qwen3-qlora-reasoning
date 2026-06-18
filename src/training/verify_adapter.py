@@ -44,15 +44,23 @@ def verify_adapter(
     generated = generator.generate([sample["messages"]], batch_size=1)[0]
 
     # 第 5 步: 构建验证结果
-    #   - passed=True: 生成成功（连接测试 + 功能测试）
-    #   - 记录 sample_id / generated_tokens / stop_reason 供后续分析
+    #   - stop_success: 停止 token 是否正常触发（im_end / endoftext）
+    #   - under_token_budget: 未打满 max_new_tokens（说明没有无尽的续写）
+    #   - passed: 停止正常 且 未超 token 上限
+    max_new = int(config["generation"]["max_new_tokens"])
+    stop_success = generated["stop_reason"] in ("im_end", "endoftext")
+    under_token_budget = generated["generated_tokens"] < max_new
     result = {
-        "passed": True,
+        "passed": stop_success and under_token_budget,
         "executed_at": datetime.now(timezone.utc).isoformat(),
         "adapter_path": str(adapter_path),
         "sample_id": sample["id"],
         "generated_tokens": generated["generated_tokens"],
         "stop_reason": generated["stop_reason"],
+        "stop_success": stop_success,
+        "under_token_budget": under_token_budget,
+        "max_new_tokens": max_new,
+        "prediction_text": generated["text"],
     }
     # 第 6 步: 写入结果 JSON（供 smoke/formal 阶段的门控检查）
     write_json(output_path, result)

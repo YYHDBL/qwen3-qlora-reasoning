@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .chat_template import (
@@ -153,8 +154,18 @@ class ChatGenerator:
         except ImportError:
             pass
         self.config = config
-        # tokenizer: for_training=False => padding_side="left"（生成用左侧 padding）
+        # 优先从 adapter 目录加载 tokenizer（含训练时保存的 chat template），
+        # 确保推理模板与训练模板一致；若 adapter 目录没有 tokenizer 则回退到 base model
         self.tokenizer = load_tokenizer(config, for_training=False)
+        if adapter_path:
+            adapter_tokenizer = Path(adapter_path)
+            if (adapter_tokenizer / "tokenizer_config.json").is_file():
+                from transformers import AutoTokenizer
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    adapter_path,
+                    trust_remote_code=bool(config["model"].get("trust_remote_code", False)),
+                )
+        self.tokenizer.padding_side = "left"
         # model: 若有 adapter_path 则加载 LoRA adapter，否则直接用 base 模型
         # 统一设为 eval() 模式：关闭 dropout、关闭 BN 更新
         self.model = (
@@ -231,12 +242,13 @@ class ChatGenerator:
                     eos_token_id=list(self.stop_ids.values()),
                 )
             # ── 步骤 6: 后处理 ──
-            for output in outputs:
+            for i, output in enumerate(outputs):
+                prompt_text = prompts[i]
                 # 切掉 prompt 部分，只保留新生成 token；trim 到第一个停止 token
                 generated_ids, stop_reason = trim_generated_ids(
                     output[input_width:].tolist(), self.stop_ids
                 )
-                # 解码为文本，记录统计信息
+                # 解码为文本，记录统计信息和诊断字段
                 results.append(
                     {
                         "text": self.tokenizer.decode(
@@ -244,8 +256,15 @@ class ChatGenerator:
                             skip_special_tokens=True,
                             clean_up_tokenization_spaces=False,
                         ),
+                        "text_with_special": self.tokenizer.decode(
+                            generated_ids,
+                            skip_special_tokens=False,
+                            clean_up_tokenization_spaces=False,
+                        ),
+                        "raw_token_ids": list(generated_ids),
                         "generated_tokens": len(generated_ids),
                         "stop_reason": stop_reason,
+                        "prompt_text": prompt_text,
                     }
                 )
             # 更新进度条

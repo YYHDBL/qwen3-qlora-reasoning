@@ -331,11 +331,20 @@ class HuggingFaceGenerator:
         self.torch = torch
         self.max_length = config.max_length
         self.max_new_tokens = config.max_new_tokens
+        self._stop_ids = {
+            "im_end": self.tokenizer.convert_tokens_to_ids("<|im_end|>"),
+            "endoftext": self.tokenizer.eos_token_id,
+        }
+
+    def _trim_generated(self, generated_ids: list[int]) -> tuple[list[int], str]:
+        stop_by_id = {tid: name for name, tid in self._stop_ids.items()}
+        for index, token_id in enumerate(generated_ids):
+            if token_id in stop_by_id:
+                return generated_ids[: index + 1], stop_by_id[token_id]
+        return generated_ids, "length"
 
     def __call__(self, prompts: Sequence[str]) -> list[str]:
         """对一批 prompt 做 tokenize → generation → decode。"""
-        # 分词：同时做填充和截断，确保批次内序列长度一致
-        # add_special_tokens=False 因为评估 prompt 已由 format_evaluation_prompt 处理
         inputs = self.tokenizer(
             list(prompts),
             return_tensors="pt",
@@ -344,33 +353,32 @@ class HuggingFaceGenerator:
             max_length=self.max_length,
             add_special_tokens=False,
         )
-        # 将分词结果（input_ids、attention_mask）移到模型所在设备
         inputs = {
             key: value.to(self.model.device)
             for key, value in inputs.items()
         }
-        # 记录输入长度，后续用于从生成输出中截取仅新增的部分
         input_length = inputs["input_ids"].shape[1]
-        # inference_mode 等价于 torch.no_grad()，且额外禁用 autograd 开销
         with self.torch.inference_mode():
-            # do_sample=False → 贪婪解码（每次选概率最高的 token），保证确定性输出
-            # pad_token_id / eos_token_id 确保模型正确处理填充位置和终止条件
             outputs = self.model.generate(
                 **inputs,
                 do_sample=False,
                 max_new_tokens=self.max_new_tokens,
                 pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=list(self._stop_ids.values()),
             )
-        # 只解码新生成的 token 部分（从 input_length 起），跳过输入内容的复读
-        return [
-            self.tokenizer.decode(
-                output[input_length:],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
+        results = []
+        for output in outputs:
+            generated_ids, stop_reason = self._trim_generated(
+                output[input_length:].tolist()
             )
-            for output in outputs
-        ]
+            results.append(
+                self.tokenizer.decode(
+                    generated_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+        return results
 
 
 def run_evaluation(

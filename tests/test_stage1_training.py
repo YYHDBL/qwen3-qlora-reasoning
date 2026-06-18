@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from src.training.train_sft import (
+    _validate_formal_gates,
     build_sft_kwargs,
     load_audit_exclusions,
     resolve_run_limits,
     snapshot_data_artifacts,
-    validate_preflight_artifacts,
 )
 from src.training.model_loader import trim_generated_ids
 
@@ -96,19 +96,73 @@ def test_sft_kwargs_enable_bf16_lora_training_contract(tmp_path):
 
 
 def test_formal_mode_requires_all_preflight_artifacts(tmp_path):
+    data_dir = tmp_path / "data"
+    overfit_dir = tmp_path / "output" / "overfit"
+    smoke_dir = tmp_path / "output" / "smoke"
+    data_dir.mkdir(parents=True)
+    overfit_dir.mkdir(parents=True)
+    smoke_dir.mkdir(parents=True)
+
+    config = {
+        "data": {"output_dir": str(data_dir)},
+        "experiment": {"output_root": str(tmp_path / "output")},
+    }
+
     with pytest.raises(FileNotFoundError, match="preflight"):
-        validate_preflight_artifacts(tmp_path)
+        _validate_formal_gates(config)
 
-    for name in (
-        "dataset_manifest.json",
-        "token_report.json",
-        "batch_audit.json",
-        "overfit_passed.json",
-        "adapter_reload.json",
-    ):
-        (tmp_path / name).write_text("{}\n", encoding="utf-8")
+    for name in ("dataset_manifest.json", "token_report.json", "batch_audit.json"):
+        (data_dir / name).write_text("{}\n", encoding="utf-8")
+    (overfit_dir / "overfit_passed.json").write_text('{"passed":true}\n', encoding="utf-8")
+    (smoke_dir / "adapter_reload.json").write_text('{"passed":true}\n', encoding="utf-8")
 
-    validate_preflight_artifacts(tmp_path)
+    _validate_formal_gates(config)
+
+
+def test_formal_gate_rejects_failed_overfit(tmp_path):
+    data_dir = tmp_path / "data"
+    overfit_dir = tmp_path / "output" / "overfit"
+    smoke_dir = tmp_path / "output" / "smoke"
+    data_dir.mkdir(parents=True)
+    overfit_dir.mkdir(parents=True)
+    smoke_dir.mkdir(parents=True)
+
+    config = {
+        "data": {"output_dir": str(data_dir)},
+        "experiment": {"output_root": str(tmp_path / "output")},
+    }
+
+    for name in ("dataset_manifest.json", "token_report.json", "batch_audit.json"):
+        (data_dir / name).write_text("{}\n", encoding="utf-8")
+    (overfit_dir / "overfit_passed.json").write_text('{"passed":false}\n', encoding="utf-8")
+    (smoke_dir / "adapter_reload.json").write_text('{"passed":true}\n', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="overfit gate"):
+        _validate_formal_gates(config)
+
+
+def test_formal_gate_rejects_failed_adapter_reload(tmp_path):
+    data_dir = tmp_path / "data"
+    overfit_dir = tmp_path / "output" / "overfit"
+    smoke_dir = tmp_path / "output" / "smoke"
+    data_dir.mkdir(parents=True)
+    overfit_dir.mkdir(parents=True)
+    smoke_dir.mkdir(parents=True)
+
+    config = {
+        "data": {"output_dir": str(data_dir)},
+        "experiment": {"output_root": str(tmp_path / "output")},
+    }
+
+    for name in ("dataset_manifest.json", "token_report.json", "batch_audit.json"):
+        (data_dir / name).write_text("{}\n", encoding="utf-8")
+    (overfit_dir / "overfit_passed.json").write_text('{"passed":true}\n', encoding="utf-8")
+    (smoke_dir / "adapter_reload.json").write_text(
+        '{"passed":false,"stop_reason":"length","generated_tokens":256}\n', encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="adapter reload"):
+        _validate_formal_gates(config)
 
 
 def test_generated_ids_stop_at_first_chat_terminator_before_batch_padding():

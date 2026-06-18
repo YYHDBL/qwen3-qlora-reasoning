@@ -140,9 +140,17 @@ def _run_validator(validator: Mapping[str, Any], prediction: str) -> bool:
         )
     if validator_type == "contains":
         values = validator.get("values")
-        return isinstance(values, list) and all(
+        if not (isinstance(values, list) and all(
             isinstance(value, str) and value in prediction for value in values
-        )
+        )):
+            return False
+        max_words = validator.get("max_words")
+        if isinstance(max_words, int) and len(prediction.split()) > max_words:
+            return False
+        max_lines = validator.get("max_lines")
+        if isinstance(max_lines, int) and len(prediction.splitlines()) > max_lines:
+            return False
+        return True
     raise ValueError(f"unsupported validator: {validator_type}")
 
 

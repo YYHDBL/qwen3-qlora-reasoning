@@ -8,5 +8,5 @@
 {"id":"dev-rewrite-01","category":"rewriting","messages":[{"role":"user","content":"Rewrite \"The task was completed by Ana.\" in active voice. Output only the rewritten sentence."}],"validator":{"type":"exact","value":"Ana completed the task."}}
 {"id":"dev-stop-01","category":"stop_behavior","messages":[{"role":"user","content":"Output DONE and stop immediately. Do not explain."}],"validator":{"type":"exact","value":"DONE"}}
 {"id":"dev-classify-01","category":"classification","messages":[{"role":"user","content":"Classify \"A triangle has three sides\" as true or false. Output only true or false."}],"validator":{"type":"exact","value":"true"}}
-{"id":"dev-contains-01","category":"content_constraint","messages":[{"role":"user","content":"Write one short sentence containing both rain and glass."}],"validator":{"type":"contains","values":["rain","glass"]}}
+{"id":"dev-contains-01","category":"content_constraint","messages":[{"role":"user","content":"Write one short sentence containing both rain and glass."}],"validator":{"type":"contains","values":["rain","glass"],"max_words":20,"max_lines":1}}
 {"id":"dev-count-01","category":"fixed_item_count","messages":[{"role":"user","content":"Give exactly three non-empty lines, each containing one fruit name and no numbering."}],"validator":{"type":"line_count","count":3}}
