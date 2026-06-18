@@ -290,12 +290,17 @@ def run_instruction_evaluation(
             _iter, total=len(rows), desc="Scoring", unit="sample",
         )
     predictions = [
-        evaluate_instruction_prediction(
-            row,
-            result["text"],
-            result["stop_reason"],
-            result["generated_tokens"],
-        )
+        {
+            **evaluate_instruction_prediction(
+                row,
+                result["text"],
+                result["stop_reason"],
+                result["generated_tokens"],
+            ),
+            "text_with_special": result.get("text_with_special"),
+            "raw_token_ids": result.get("raw_token_ids"),
+            "prompt_text": result.get("prompt_text"),
+        }
         for row, result in _iter
     ]
     run_config = {

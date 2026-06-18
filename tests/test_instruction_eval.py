@@ -101,3 +101,63 @@ def test_repository_eval_files_have_disjoint_ids():
     assert dev
     assert test
     assert {row["id"] for row in dev}.isdisjoint({row["id"] for row in test})
+
+
+def test_contains_validator_rejects_if_exceeding_max_words():
+    result = evaluate_instruction_prediction(
+        {
+            "id": "x",
+            "category": "content_constraint",
+            "validator": {"type": "contains", "values": ["rain", "glass"], "max_words": 5},
+        },
+        "rain falls on the glass window pane",
+        stop_reason="im_end",
+        generated_tokens=7,
+    )
+
+    assert result["instruction_success"] is False
+
+
+def test_contains_validator_passes_within_word_limit():
+    result = evaluate_instruction_prediction(
+        {
+            "id": "x",
+            "category": "content_constraint",
+            "validator": {"type": "contains", "values": ["rain", "glass"], "max_words": 8},
+        },
+        "rain on the glass",
+        stop_reason="im_end",
+        generated_tokens=4,
+    )
+
+    assert result["instruction_success"] is True
+
+
+def test_contains_validator_rejects_if_exceeding_max_lines():
+    result = evaluate_instruction_prediction(
+        {
+            "id": "x",
+            "category": "content_constraint",
+            "validator": {"type": "contains", "values": ["alpha"], "max_lines": 1},
+        },
+        "alpha\nbeta",
+        stop_reason="im_end",
+        generated_tokens=2,
+    )
+
+    assert result["instruction_success"] is False
+
+
+def test_contains_validator_without_limits_still_works():
+    result = evaluate_instruction_prediction(
+        {
+            "id": "x",
+            "category": "content_constraint",
+            "validator": {"type": "contains", "values": ["hello", "world"]},
+        },
+        "hello beautiful world and many more words here",
+        stop_reason="im_end",
+        generated_tokens=8,
+    )
+
+    assert result["instruction_success"] is True

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -86,7 +87,16 @@ def main() -> None:
     config = load_yaml_config(args.config)
     validate_stage1_config(config)
     result = verify_adapter(config, args.adapter_path, args.output)
-    print(f"Adapter reload passed: {result['adapter_path']}")
+    if result["passed"]:
+        print(f"Adapter reload passed: {result['adapter_path']}")
+    else:
+        print(
+            f"Adapter reload FAILED: stop_reason={result['stop_reason']}, "
+            f"generated_tokens={result['generated_tokens']}, "
+            f"max_new_tokens={result['max_new_tokens']}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
