@@ -127,13 +127,17 @@ decoded_sup = tokenizer.decode(supervised_ids, skip_special_tokens=False)
 print(f"   仅 assistant 部分: {repr(decoded_sup[:200])}")
 
 # ─────────────────────────────────────────────
-# 第 7 步: 评估用的生成 prompt（和训练不同）
+# 第 7 步: 评估/推理用的生成 prompt
 # ─────────────────────────────────────────────
+# 推理时只传 user 的历史消息（不含最后一条 assistant 回复），
+# add_generation_prompt=True 会在末尾加 "assistant\n" 等待模型补全
+# 把所有 role 为 user 和 system（非 assistant）的消息挑出来
 from chat_template import render_generation_prompt
-gen_prompt = render_generation_prompt(tokenizer, messages)
+gen_messages = [m for m in messages if m["role"] != "assistant"]
+gen_prompt = render_generation_prompt(tokenizer, gen_messages)
 
 print("\n" + "=" * 60)
-print("6. 评估/推理时用的生成 prompt:")
+print("6. 评估/推理时用的生成 prompt（只有 user 消息）:")
 print(gen_prompt)
 print("  ↑ 以 <|im_start|>assistant\\n 结尾，模型从这里开始续写")
 
