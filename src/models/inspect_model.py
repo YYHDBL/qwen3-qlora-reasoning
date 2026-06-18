@@ -227,7 +227,7 @@ def inspect_adapter(config: dict[str, Any], adapter_path: str) -> None:
             {"role": "user", "content": "Say hello in one word."},
         ],
     )
-    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
     model.eval()
     with torch.inference_mode():
