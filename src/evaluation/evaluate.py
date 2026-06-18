@@ -262,6 +262,16 @@ class HuggingFaceGenerator:
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.model_id, **tokenizer_kwargs
         )
+        if config.model_mode == "lora" and config.adapter_path:
+            adapter_dir = Path(config.adapter_path)
+            if (adapter_dir / "tokenizer_config.json").is_file():
+                adapter_tokenizer_kwargs = dict(tokenizer_kwargs)
+                if config.adapter_revision:
+                    adapter_tokenizer_kwargs["revision"] = config.adapter_revision
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    config.adapter_path,
+                    **adapter_tokenizer_kwargs,
+                )
         status(
             f"Tokenizer loaded: {self.tokenizer.__class__.__name__}"
         )
@@ -285,7 +295,7 @@ class HuggingFaceGenerator:
         # 根据 model_mode 决定加载策略：bf16 完整精度 vs nf4 4-bit 量化
         if config.model_mode == "bf16":
             # BF16 模式：直接加载完整 BF16 权重，适合显存充足的场景（如 A100）
-            model_kwargs["torch_dtype"] = torch.bfloat16
+            model_kwargs["dtype"] = torch.bfloat16
             load_description = "BF16 Base"
         else:
             # NF4 模式：4-bit 量化 + 双重量化，显著降低显存占用

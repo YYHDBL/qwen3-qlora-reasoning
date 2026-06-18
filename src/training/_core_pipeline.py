@@ -79,8 +79,6 @@ if mask and isinstance(mask[0], list):
     mask = mask[0]
     if input_ids and isinstance(input_ids[0], list):
         input_ids = input_ids[0]
-    input_ids = input_ids[0]
-    mask = mask[0]
 
 print("\n" + "=" * 60)
 print("3. tokenize 后的 input_ids 和 mask:")
@@ -129,15 +127,17 @@ print(f"   仅 assistant 部分: {repr(decoded_sup[:200])}")
 # ─────────────────────────────────────────────
 # 第 7 步: 评估/推理用的生成 prompt
 # ─────────────────────────────────────────────
-# 推理时只传 user 的历史消息（不含最后一条 assistant 回复），
+# 推理时保留历史，只去掉最后一条 gold assistant 回复，
 # add_generation_prompt=True 会在末尾加 "assistant\n" 等待模型补全
-# 把所有 role 为 user 和 system（非 assistant）的消息挑出来
 from chat_template import render_generation_prompt
-gen_messages = [m for m in messages if m["role"] != "assistant"]
+if messages and messages[-1]["role"] == "assistant":
+    gen_messages = messages[:-1]
+else:
+    gen_messages = messages
 gen_prompt = render_generation_prompt(tokenizer, gen_messages)
 
 print("\n" + "=" * 60)
-print("6. 评估/推理时用的生成 prompt（只有 user 消息）:")
+print("6. 评估/推理时用的生成 prompt（保留历史，去掉最后答案）:")
 print(gen_prompt)
 print("  ↑ 以 <|im_start|>assistant\\n 结尾，模型从这里开始续写")
 

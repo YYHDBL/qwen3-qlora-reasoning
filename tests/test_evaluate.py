@@ -123,6 +123,20 @@ def test_lora_mode_requires_adapter_path():
         )
 
 
+def test_huggingface_generator_uses_transformers_v5_dtype_argument():
+    source = Path("src/evaluation/evaluate.py").read_text(encoding="utf-8")
+
+    assert 'model_kwargs["dtype"] = torch.bfloat16' in source
+    assert 'model_kwargs["torch_dtype"] = torch.bfloat16' not in source
+
+
+def test_lora_evaluation_prefers_adapter_tokenizer_for_template_consistency():
+    source = Path("src/evaluation/evaluate.py").read_text(encoding="utf-8")
+
+    assert "AutoTokenizer.from_pretrained(\n                    config.adapter_path" in source
+    assert "(adapter_dir / \"tokenizer_config.json\").is_file()" in source
+
+
 def test_evaluate_records_reports_batch_progress():
     records = [
         make_record("one", "cipher", "one"),
