@@ -62,6 +62,21 @@ For the full narrative, read:
 - [Stage 3 Wonderland experiment report](docs/reports/stage3_wonderland_experiment_report.md)
 - [Stage 3 data audit](reports/stage3_bit_data_audit.md)
 
+## Dataset and Acknowledgements
+
+The Wonderland reasoning data used in this project comes from Kaggle's
+[NVIDIA Nemotron Model Reasoning Challenge](https://www.kaggle.com/competitions/nvidia-nemotron-model-reasoning-challenge/overview).
+The dataset consists of rule-induction tasks where each prompt provides several
+examples and asks for the transformed output for a new query.
+
+This project also acknowledges
+[tonghuikang/nemotron](https://github.com/tonghuikang/nemotron), the Progress
+Prize winning submission repository for the same challenge. Its public code and
+writeup provided the main inspiration for solver-aided reasoning traces and CoT
+corpus construction. This repository does not directly train on its long traces;
+instead, it adapts the idea into local deterministic reasoner wrappers and
+short compressed CoT suitable for a 1.7B Qwen3 model.
+
 ## Repository Layout
 
 ```text
@@ -261,6 +276,28 @@ The full suite requires the Python dependencies in `requirements-dev.txt`.
 - Stage 3 compressed CoT is intentionally short. Long solver traces are kept
   only in debug files and are not used as training completions.
 - Wonderland validation/test must not be used for SFT data generation.
+
+## Future Work
+
+The current experiments show that small-model SFT can teach protocol and some
+pattern-like reasoning, but it is not enough for robust algorithm execution.
+Useful next directions:
+
+- **Stronger base model:** repeat the Stage 3 pipeline on a 4B or larger Qwen3
+  model to test whether arithmetic and mapping failures are mainly capacity
+  limits.
+- **Tool-augmented arithmetic:** route gravity/unit tasks through a calculator
+  or verifier instead of expecting the 1.7B model to square, divide, sort, and
+  round reliably during generation.
+- **Rejection sampling:** generate multiple candidate traces, keep only outputs
+  that pass deterministic validators, and fine-tune on verified completions.
+- **RL after better cold-start:** postpone RL until the model has a denser
+  supply of near-correct behaviors; otherwise rewards remain too sparse.
+- **Task-specific curricula:** continue the successful numeral-style enriched
+  traces, while designing separate curricula for bit rules, cipher mapping, and
+  symbolic equations.
+- **Cleaner public release:** rotate any previously exposed experiment-tracking
+  key and consider history rewriting if the repository is made public.
 
 ## Project Hygiene
 
