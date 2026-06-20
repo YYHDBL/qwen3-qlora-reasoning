@@ -1,301 +1,276 @@
-# qwen3-qlora-reasoning
+# Qwen3-1.7B LoRA Reasoning Lab
 
-基于 `Qwen/Qwen3-4B-Base` 的 BF16 LoRA 指令微调项目，支持两阶段训练：
+> A staged post-training research project for turning `Qwen3-1.7B-Base` into a
+> chat-capable, strict-format, thinking-protocol model and cold-starting it on
+> Wonderland rule induction.
 
-- **Stage 1**：指令跟随微调（当前仓库实现）
-- **Stage 2**：推理能力训练（开发中）
+This repository is an end-to-end engineering record of a small-model
+post-training pipeline. It covers data construction, Qwen3 chat-template
+handling, assistant-only label audits, BF16 LoRA SFT, adapter reload checks,
+strict-format regression, thinking-protocol evaluation, and Wonderland
+reasoning diagnostics.
 
-## 数据流概览
+The goal is not to ship a general-purpose instruction model. The goal is to
+build a reproducible experimental chain and expose the real failure modes:
+stop-token calibration, strict short-answer control, `<think>` protocol
+stability, solver-distilled compressed CoT, and the arithmetic / algorithmic
+limits of a 1.7B model.
 
-```
-data/raw/train.csv              ← 原始 CSV（id, prompt, answer 三列）
-        │
-        ▼
-prepare_dataset.py              ← 校验、分类（unit_conversion/cipher/...）、80/10/10 分片
-        │
-data/processed/train.jsonl      ← 处理后的 JSONL（id, task_type, prompt, answer）
-data/processed/validation.jsonl
-data/processed/test.jsonl
-        │
-        ▼
-analyze_tokens.py               ← 分析 token 长度分布，确定 max_length
-        │
-        ▼
-label_audit.py                  ← 审计助理标签是否正确（-100 mask），输出排除列表
-        │
-        ▼
-train_sft.py                    ← SFT 训练（overfit → smoke → formal 三级门控）
-        │
-        ▼
-outputs/stage1_no_robots/       ← 训练产物（adapter 权重、metrics、环境快照）
-```
+## Highlights
 
-## 项目结构
+| Area | What This Repo Implements |
+|---|---|
+| Base model | `models/Qwen3-1.7B-Base` local path, with YAML support for `Qwen/Qwen3-4B-Base` experiments |
+| Training | BF16 LoRA SFT, `all-linear`, `r=32`, `alpha=64`, `modules_to_save=["lm_head"]` |
+| Loss | Assistant-only supervision through Qwen3-compatible training chat templates |
+| Stage 1 | No Robots instruction following and stop-token calibration |
+| Stage 1.5 | Strict-format / answer-only / JSON-only / stop behavior replay |
+| Stage 2 | Thinking protocol warmup with no-think replay |
+| Stage 3 | Wonderland cold-start data generation, smoke/formal runs, per-task diagnostics |
+| Audits | Prompt split leakage, token length, final-answer parse, `<think>` closure, `\boxed{}` residue, `<|im_end|>` residue |
 
-```
-├── configs/
-│   ├── stage1_no_robots.yaml            # Stage 1 主配置（No Robots 数据集）
-│   └── stage1_no_robots_qwen3_1_7b_local.yaml  # Qwen3-1.7B 本地模型变体
-├── scripts/
-│   ├── probe_im_end_rank.py             # 探索 lm_head 是否需要解冻
-│   ├── generate_stop_overfit_data.py    # 生成短回答停止行为测试数据
-│   └── stop_overfit_train.py            # 独立停止行为 overfit 训练脚本
-├── data/
-│   ├── raw/                    # 原始数据（CSV）
-│   │   └── train.csv
-│   ├── processed/              # 处理后的 JSONL
-│   │   ├── train.jsonl
-│   │   ├── validation.jsonl
-│   │   └── test.jsonl
-│   ├── eval/                   # 指令跟随评估样本
-│   │   ├── instruction_dev.jsonl
-│   │   └── instruction_test.jsonl
-│   └── instruction/            # 数据审计产物
-│       └── stage1/
-│           ├── train.jsonl
-│           ├── validation.jsonl
-│           ├── token_report.json
-│           └── batch_audit.json
-├── src/
-│   ├── common/                 # 通用工具
-│   │   ├── config.py           # YAML 加载、覆盖、校验
-│   │   ├── experiment.py       # 文件 I/O、SHA-256、环境快照
-│   │   └── prompt_format.py    # prompt/answer 格式化
-│   ├── data_processing/        # 数据处理
-│   │   ├── classifier.py       # 按 prompt 前缀对推理任务分类
-│   │   ├── splitters.py        # 确定性分层 80/10/10 划分
-│   │   ├── prepare_dataset.py  # CSV → 校验 → 分类 → 分片 → JSONL
-│   │   └── instruction_data.py # No Robots 对话集下载与校验
-│   ├── training/               # Stage 1 训练
-│   │   ├── chat_template.py    # Qwen3 对话模板（推理/训练变体）
-│   │   ├── model_loader.py     # tokenizer / BF16 模型 / LoRA 加载
-│   │   ├── lora.py             # LoRA 配置构造
-│   │   ├── label_audit.py      # 训练前助理标签审计
-│   │   ├── train_sft.py        # SFT 训练入口（overfit/smoke/formal）
-│   │   ├── verify_adapter.py   # 重载 adapter + 单条生成验证
-│   │   └── _core_pipeline.py   # 核心流程 demo（一条数据走到底）
-│   ├── evaluation/             # 评估
-│   │   ├── evaluate.py         # 统一评估入口
-│   │   ├── instruction_eval.py # 指令跟随评估
-│   │   ├── analyze_tokens.py   # tokenizer 长度分布分析
-│   │   ├── answer_evaluation.py# 任务感知答案解析与比较
-│   │   └── metrics.py          # 指标聚合
-│   └── models/
-│       └── chat_demo.py        # 聊天交互 demo
-├── tests/                      # 单元测试（离线、无 GPU）
-│   ├── test_evaluate.py
-│   ├── test_instruction_eval.py
-│   └── test_transformers_compat_static.py
-└── requirements*.txt           # 依赖文件
+## Training Roadmap
+
+```text
+Qwen3-1.7B-Base
+  -> Stage 1   No Robots instruction-following adapter
+  -> Stage 1.5 strict-format / stop adapter
+  -> Stage 2   thinking warmup adapter
+  -> Stage 3   Wonderland cold-start adapter
 ```
 
-## 环境安装
+Current conclusion: Stage 3 SFT establishes formatting and improves simple
+pattern-matching tasks, especially numeral conversion. It does not reliably
+solve hard Wonderland tasks such as gravity, unit conversion, cipher, bit
+manipulation, or symbolic equations on a 1.7B model. See the reports below for
+the full analysis.
+
+## Results Snapshot
+
+| Stage | Main Result |
+|---|---|
+| Stage 1 | LoRA-only learned answer intent but failed to stop; saving `lm_head` made `<|im_end|>` rank top-1 in the stop overfit setup |
+| Stage 1.5 | Strict-format stop accuracy reached about 99%; answer-only and JSON-only behavior became stable |
+| Stage 2 | Thinking protocol success reached about 92% while no-think prompts stayed clean |
+| Stage 3 v0_1 | Format cold-start worked, but reasoning accuracy remained low |
+| Stage 3 v0_2 | Enriched CoT lifted numeral accuracy to a peak of 82.1% |
+| Stage 3 v0_3 | Median-based traces and shorter cipher traces improved format stability but did not solve arithmetic tasks |
+
+For the full narrative, read:
+
+- [Qwen3-1.7B post-training experiment report](docs/reports/qwen3_1_7b_post_training_experiment_report.md)
+- [Stage 3 Wonderland experiment report](docs/reports/stage3_wonderland_experiment_report.md)
+- [Stage 3 data audit](reports/stage3_bit_data_audit.md)
+
+## Repository Layout
+
+```text
+configs/                         YAML configs for staged experiments
+data/
+  raw/                           Wonderland train CSV source
+  processed/                     Prepared train/validation/test JSONL
+  eval/                          Small instruction-eval fixtures
+docs/
+  INDEX.md                       Documentation map
+  reports/                       Human-readable experiment reports
+reports/                         Machine/data audit reports
+scripts/
+  generate_stage1_5_strict_data.py
+  generate_stage2_thinking_data.py
+  generate_stage3_wonderland_cold_start.py
+  generate_stage3_v0_2.py
+  generate_stage3_v0_3.py
+  run_stage3_*.py
+  stage3_diagnostic.py
+  stage3_trace_audit.py
+  stage3_reasoners/              Local deterministic reasoner wrappers
+src/
+  common/                        Config, experiment metadata, prompt formatting
+  data_processing/               Dataset preparation and splitters
+  evaluation/                    Instruction and answer evaluation
+  training/                      Qwen3 template, LoRA loading, SFT, label audit
+  models/                        Local chat / inspection tools
+tests/                           Offline unit tests
+```
+
+Generated artifacts are intentionally ignored:
+
+- `outputs/`
+- `data/instruction/`
+- model weights and adapters
+- Hugging Face caches
+- local `.env` files
+
+## Installation
+
+For CPU-only development and tests:
 
 ```bash
-# 基础依赖
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+```
 
-# Stage 1 训练（GPU 必需）
+For training / evaluation on a BF16-capable NVIDIA GPU:
+
+```bash
 pip install -r requirements-stage1-gpu.txt
-
-# 完整评估（含 bitsandbytes 4-bit 量化）
 pip install -r requirements-gpu.txt
 ```
 
-## 两种数据来源
+The project expects the local model path for 1.7B runs:
 
-### 方式 A：HuggingFace No Robots（默认）
-
-```bash
-python -m src.data_processing.instruction_data \
-  --config configs/stage1_no_robots.yaml
+```text
+models/Qwen3-1.7B-Base
 ```
 
-生成 `data/instruction/stage1/` 下的 JSONL，天然含 `messages` 字段。
+`models/` is gitignored except for `models/README.md`.
 
-### 方式 B：自己的 CSV（`data/raw/train.csv`）
+## Secrets
 
-```bash
-python -m src.data_processing.prepare_dataset
-```
-
-要求 CSV 列名为 `id, prompt, answer`，输出 `data/processed/{train,validation,test}.jsonl`。
-
-然后配置 `stage1_no_robots.yaml` 的 `data.output_dir` 指向 `data/processed`。
-
-> **注意**：自定义数据格式为 `prompt`/`answer`，进入 chat template 前需先转为 `messages` 格式。详见 `_core_pipeline.py`。
-
-## 训练前分析
-
-```bash
-# 分析 token 长度分布，辅助确定 max_length
-python -m src.evaluation.analyze_tokens \
-  --config configs/stage1_no_robots.yaml
-```
-
-输出各分片 token 长度统计（min/max/mean/p95）和 token 数阈值建议。
-
-## 标签审计
-
-```bash
-# 验证 assistant-only mask 的正确性
-python -m src.training.label_audit \
-  --config configs/stage1_no_robots.yaml
-```
-
-- 每条样本的 assistant token 数量
-- 边界检查（每个 assistant span 后必须有 `<|im_end|>`）
-- 输出 `token_report.json`（排除的 ID 列表供训练过滤）
-
-## 核心流程演示
-
-```bash
-python -m src.training._core_pipeline
-```
-
-用 `data/processed/train.jsonl` 的第一条数据走完完整流程：
-
-```
-原始 JSONL → messages 格式 → 训练模板渲染 → tokenize + mask → labels
-```
-
-## 训练
-
-三种运行模式：
-
-| 模式 | 用途 | 数据量 | 步数 | 门控 |
-|------|------|--------|------|------|
-| `overfit` | 验证 loss 能下降到 80% 以下 | 16 条 | 40 | 自动检查 loss 下降 |
-| `smoke` | 小规模冒烟测试 | 256 条 | 20 | 需 overfit 通过 |
-| `formal` | 正式完整训练 | 全部 | 3 epoch | 需所有前置门控通过 |
-
-```bash
-# overfit
-python -m src.training.train_sft \
-  --config configs/stage1_no_robots.yaml --mode overfit
-
-# smoke
-python -m src.training.train_sft \
-  --config configs/stage1_no_robots.yaml --mode smoke
-
-# formal
-python -m src.training.train_sft \
-  --config configs/stage1_no_robots.yaml --mode formal
-```
-
-### lm_head 解冻
-
-配置中 `lora.modules_to_save: ["lm_head"]` 使 `lm_head` 层**全量参与训练**（不通过 LoRA）。
-
-用途：LoRA 对 Q/K/V/O 和 FFN 层的低秩干预不足以让 `lm_head` 学会在正确位置生成 `<|im_end|>`。解冻 `lm_head` 后其权重可直接更新，改善停止 token 的学习。
-
-### 停止行为 overfit 测试
-
-`scripts/` 下提供独立测试脚本，用于快速验证模型能否学会输出 `<|im_end|>`：
-
-```bash
-# 第 1 步：生成短回答训练数据
-python scripts/generate_stop_overfit_data.py
-
-# 第 2 步：运行停止 overfit 训练
-python scripts/stop_overfit_train.py
-```
-
-```bash
-# 探测 lm_head 是否需要解冻（分析 logit 排名）
-python scripts/probe_im_end_rank.py
-```
-
-## Adapter 验证
-
-训练后重载 LoRA adapter 并生成一次，验证 stop token 触发：
-
-```bash
-python -m src.training.verify_adapter \
-  --config configs/stage1_no_robots.yaml \
-  --adapter-path outputs/stage1_no_robots/overfit/adapter \
-  --output outputs/stage1_no_robots/overfit/adapter_reload.json
-```
-
-## 评估
-
-```bash
-# 评估 base 模型指令跟随
-python -m src.evaluation.instruction_eval \
-  --config configs/stage1_no_robots.yaml \
-  --split dev \
-  --output-dir outputs/stage1_no_robots/base-dev
-
-# 评估 LoRA adapter
-python -m src.evaluation.instruction_eval \
-  --config configs/stage1_no_robots.yaml \
-  --split dev \
-  --adapter-path outputs/stage1_no_robots/formal/adapter \
-  --output-dir outputs/stage1_no_robots/lora-dev
-```
-
-### 统一评估入口（支持 BF16/NF4/LoRA）
-
-```bash
-python -m src.evaluation.evaluate \
-  --config configs/stage1_no_robots.yaml \
-  --split test \
-  --output-dir outputs/stage1_no_robots/eval
-```
-
-## 评估指标
-
-### 指令跟随
-
-| 指标 | 含义 |
-|------|------|
-| `instruction_accuracy` | 完全遵循指令的比例 |
-| `format_accuracy` | 输出格式正确的比例 |
-| `stop_accuracy` | 在 256 token 内正确停止的比例 |
-| `continuation_failure_rate` | 达到 max_tokens 被截断的比例 |
-
-### 推理答案评估
-
-| 指标 | 含义 |
-|------|------|
-| `primary_accuracy` | 主要正确率（各类别定义不同） |
-| `strict_accuracy` | 严格匹配 gold answer |
-| `normalized_accuracy` | 标准化后匹配 |
-| `parse_success_rate` | 能解析出有效答案的比例 |
-
-## SwanLab 实验追踪
-
-训练过程自动上报到 [SwanLab](https://swanlab.cn)。配置位置：
+Do not commit API keys. Config files keep:
 
 ```yaml
 experiment:
-  name: stage1_no_robots
-  swanlab_project: "stage1-no-robots"
-  swanlab_workspace: null
-  swanlab_api_key: null        # 或从环境变量 SWANLAB_API_KEY 读取
+  swanlab_api_key: null
 ```
 
-## 配置说明
-
-`configs/stage1_no_robots.yaml` 包含段：
-
-- **experiment**：实验名、输出目录、SwanLab 配置
-- **model**：模型 ID、dtype、attention 实现、cache 目录
-- **data**：数据集来源（Hub 或本地）、output_dir
-- **lora**：rank / alpha / dropout / target_modules / modules_to_save
-- **training**：max_length / batch / 学习率 / epoch / 门控参数
-- **generation**：max_new_tokens、do_sample
-- **evaluation**：dev/test JSONL 路径
-
-## GPU 要求
-
-- BF16 训练需要支持 BF16 的 NVIDIA GPU（RTX 3090/4090, A100 等）
-- 4-bit 评估需 `bitsandbytes`
-
-## 本地测试
-
-无需 GPU 的模块级测试：
+Set the key through the environment instead:
 
 ```bash
-python -m pytest src/ tests/ -x -q
+cp .env.example .env
+export SWANLAB_API_KEY=...
 ```
+
+If a key was ever committed before, rotate it before publishing or using the
+repository publicly.
+
+## Core Workflows
+
+### Stage 1: No Robots Data
+
+```bash
+python -m src.data_processing.instruction_data \
+  --config configs/stage1_no_robots_qwen3_1_7b_local.yaml
+```
+
+### Label Audit
+
+```bash
+python -m src.training.label_audit \
+  --config configs/stage1_no_robots_qwen3_1_7b_local.yaml
+```
+
+The audit verifies assistant-only masks, supervised token counts, and
+`<|im_end|>` boundary supervision.
+
+### SFT Training
+
+Training is gated:
+
+| Mode | Purpose | Gate |
+|---|---|---|
+| `overfit` | Prove the pipeline can learn a tiny set | Loss must drop enough |
+| `smoke` | Short end-to-end sanity run | Adapter reload and metrics check |
+| `formal` | Full configured run | Requires previous gates and audits |
+
+```bash
+python -m src.training.train_sft \
+  --config configs/stage2_thinking_warmup.yaml \
+  --mode smoke
+```
+
+### Stage 3 Data Generation
+
+The current cold-start generator only reads IDs listed in
+`splits/wonderland_split_seed42.json` under `stage3_sft_pool`.
+
+```bash
+python scripts/generate_stage3_wonderland_cold_start.py
+```
+
+It writes:
+
+```text
+data/instruction/stage3_wonderland_cold_start/train.jsonl
+data/instruction/stage3_wonderland_cold_start/dev.jsonl
+data/instruction/stage3_wonderland_cold_start/report.json
+data/instruction/stage3_wonderland_cold_start/audit.md
+data/instruction/stage3_wonderland_cold_start/manual_review.md
+data/instruction/stage3_wonderland_cold_start/debug/raw_traces.jsonl
+```
+
+The generator requires a real Qwen3 tokenizer for token-length checks. It does
+not fall back to character estimates.
+
+### Stage 3 Experiment Scripts
+
+```bash
+python scripts/run_stage3_smoke.py
+python scripts/run_stage3_formal_v0_1.py
+python scripts/run_stage3_formal_v0_2.py
+python scripts/stage3_diagnostic.py
+python scripts/stage3_trace_audit.py
+```
+
+These scripts are research utilities; inspect the script headers and output
+paths before launching GPU jobs.
+
+## Evaluation
+
+Instruction following:
+
+```bash
+python -m src.evaluation.instruction_eval \
+  --config configs/stage1_no_robots_qwen3_1_7b_local.yaml \
+  --split dev \
+  --output-dir outputs/eval/instruction-dev
+```
+
+Wonderland binary / protocol probes:
+
+```bash
+python scripts/eval_wonderland_binary.py
+python scripts/eval_stage2_thinking.py
+```
+
+## Testing
+
+Offline tests:
+
+```bash
+python -m pytest tests/test_stage3_wonderland_cold_start.py \
+  tests/test_stage2_thinking_data.py \
+  tests/test_stage1_5_strict_data.py -q
+```
+
+Full suite:
+
+```bash
+python -m pytest -q
+```
+
+The full suite requires the Python dependencies in `requirements-dev.txt`.
+
+## Engineering Notes
+
+- `modules_to_save=["lm_head"]` is not optional for this project. It is the
+  observed fix for stop-token calibration under LoRA SFT.
+- The training template and inference template intentionally differ. Training
+  requires generation markers for assistant-only loss.
+- Stage 3 compressed CoT is intentionally short. Long solver traces are kept
+  only in debug files and are not used as training completions.
+- Wonderland validation/test must not be used for SFT data generation.
+
+## Project Hygiene
+
+- Contribution workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Secret handling: [SECURITY.md](SECURITY.md)
+- Documentation map: [docs/INDEX.md](docs/INDEX.md)
+
+## Status
+
+This is a research codebase with preserved experiment scripts and reports. It
+is suitable for reproducing the staged training workflow, auditing data
+generation, and studying small-model failure modes. It is not packaged as a
+library and does not include model weights or adapters.

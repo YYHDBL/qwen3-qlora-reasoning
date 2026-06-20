@@ -3,7 +3,7 @@ experiment:
   output_root: outputs/stage1_no_robots_qwen3_1_7b_local
   swanlab_project: "stage1-no-robots-qwen3-1.7b"
   swanlab_workspace: yyhdbl
-  swanlab_api_key: w5i4zEmPe04Nm4ul9RloZ
+  swanlab_api_key: null
 
 model:
   id: models/Qwen3-1.7B-Base

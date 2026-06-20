@@ -3,7 +3,7 @@ experiment:
   output_root: outputs/stage3_wonderland_coldstart
   swanlab_project: "stage3-wonderland-coldstart"
   swanlab_workspace: yyhdbl
-  swanlab_api_key: w5i4zEmPe04Nm4ul9RloZ
+  swanlab_api_key: null
 
 model:
   id: models/Qwen3-1.7B-Base

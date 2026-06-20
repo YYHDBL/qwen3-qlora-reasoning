@@ -2,81 +2,91 @@
 
 ## Project
 
-BF16 LoRA instruction fine-tuning for `Qwen/Qwen3-4B-Base` (alt: `models/Qwen3-1.7B-Base`). Two-stage: Stage 1 (instruction-following, implemented) / Stage 2 (reasoning, planned). Mixed Chinese/English codebase.
+Staged BF16 LoRA post-training for `Qwen3-1.7B-Base`, with optional 4B
+configuration support. The repository covers:
+
+1. Stage 1 No Robots instruction following
+2. Stage 1.5 strict-format / stop behavior
+3. Stage 2 thinking protocol warmup
+4. Stage 3 Wonderland cold-start SFT data and experiment scripts
+
+The codebase is mixed Chinese/English and intentionally keeps experiment
+reports alongside runnable scripts.
 
 ## Commands
 
 ```bash
-# Install (order matters — each extends the previous)
-pip install -r requirements.txt
-pip install -r requirements-stage1-gpu.txt   # training deps (torch, transformers, peft, trl, accelerate)
-pip install -r requirements-gpu.txt           # adds bitsandbytes for eval
+# CPU/offline development
+pip install -r requirements-dev.txt
 
-# Run all offline tests (no GPU needed)
-python -m pytest src/ tests/ -x -q
+# GPU training stack
+pip install -r requirements-stage1-gpu.txt
+pip install -r requirements-gpu.txt
 
-# Run a single test
-python -m pytest tests/test_label_audit.py -x -q
+# Focused tests
+python -m pytest tests/test_stage3_wonderland_cold_start.py \
+  tests/test_stage2_thinking_data.py \
+  tests/test_stage1_5_strict_data.py -q
 
-# Data prep (downloads HuggingFaceH4/no_robots → JSONL)
-python -m src.data_processing.instruction_data
+# Full tests
+python -m pytest -q
 ```
 
 ## Architecture
 
-### Gated training pipeline (must pass in order)
+### Adapter Chain
 
-| Mode | Samples | Steps | Gate |
-|------|---------|-------|------|
-| `overfit` | 16 | 40 | Loss must drop to <80% of initial |
-| `smoke` | 256 | 20 | Requires overfit pass + adapter reload success |
-| `formal` | all | 3 epochs | Requires all prior gates + audit artifacts present |
+```text
+Qwen3-1.7B-Base
+  -> Stage 1 No Robots
+  -> Stage 1.5 strict-format
+  -> Stage 2 thinking warmup
+  -> Stage 3 Wonderland cold-start
+```
 
-Run as: `python -m src.training.train_sft --config configs/stage1_no_robots.yaml --mode overfit`
+Every formal stage writes to a new output directory. Do not overwrite previous
+adapters.
 
-Training produces: `outputs/{experiment_name}/overfit|smoke|formal/{adapter,checkpoints,swanlab,logs}/` plus `resolved_config.yaml`, `train_metrics.json`, `conclusion.md`, and audit snapshots.
+### Gated Training Pipeline
 
-### The lm_head bottleneck (critical)
+| Mode | Purpose | Gate |
+|------|---------|------|
+| `overfit` | Prove the setup can learn a tiny batch | Loss decrease |
+| `smoke` | Short end-to-end check | Prior gate + reload |
+| `formal` | Full configured run | Prior gates + audits |
 
-LoRA `all-linear` + frozen `lm_head` prevents the model from learning `<|im_end|>` (stop token). The fix in every config: `lora.modules_to_save: ["lm_head"]`. Never remove this or the model won't learn to stop generating.
+Training produces `outputs/{experiment_name}/{mode}/...`, plus resolved config,
+metrics, logs, and adapter artifacts.
 
-### Config validation (enforced at runtime)
+### lm_head Bottleneck
 
-`validate_stage1_config()` in `src/common/config.py` checks:
-- Only allowed model IDs: `Qwen/Qwen3-4B-Base` or `models/Qwen3-1.7B-Base`
-- 4-bit/8-bit quantization is forbidden (`bf16` must be `true`)
-- `assistant_only_loss` must be `true`
-- `lora.target_modules` must be `all-linear`
-- `dataset_id` must be `HuggingFaceH4/no_robots`
-- Dev/test eval paths must differ
+LoRA `all-linear` with a frozen `lm_head` was not enough for reliable
+`<|im_end|>` learning. Keep:
 
-### Data processing paths
+```yaml
+lora:
+  modules_to_save: ["lm_head"]
+```
 
-- **Path A (default):** `instruction_data.py` — downloads from HuggingFace Hub → `data/instruction/stage1/{train,validation}.jsonl` (messages format)
-- **Path B (custom):** `prepare_dataset.py` — reads `data/raw/train.csv` (columns: `id, prompt, answer`) → classifies into 6 task types → stratified 80/10/10 split → `data/processed/*.jsonl`
+Removing this is a known regression risk.
 
-### Chat templates
+### Data Generation Rules
 
-Two different Jinja2 templates for different purposes:
-- `QWEN3_BASE_CHAT_TEMPLATE` — inference/generation
-- `QWEN3_TRAINING_CHAT_TEMPLATE` — must contain `{% generation %}` markers; this is how `assistant_only_loss` identifies the assistant's turn to compute loss on
-
-### Evaluation
-
-Two separate systems:
-- `instruction_eval.py` — format/stop/continuation metrics (YAML config driven)
-- `evaluate.py` — reasoning answer accuracy with BF16/NF4/LoRA modes
+- Stage 3 SFT may only read `stage3_sft_pool` from
+  `splits/wonderland_split_seed42.json`.
+- Wonderland validation/test must not be read for SFT generation.
+- Long solver traces may be saved to debug files, but training completions use
+  compressed traces only.
+- Assistant completions must not contain handwritten `<|im_end|>` or
+  `\boxed{}` residue.
+- Qwen3 tokenizer length checks are required for Stage 3 generation.
 
 ## Conventions
 
-- **Imports:** relative within `src/` (`from ..common.config import ...`), absolute `src.*` from `scripts/`
-- **Lazy imports:** heavy libs (`torch`, `transformers`, `peft`, `trl`) imported inside functions in non-training modules to avoid import overhead
-- **File I/O:** always write to `.tmp` then `os.replace()` for atomicity
-- **Status logging:** `[HH:MM:SS] [stageN] message` to stderr
-- **Type hints:** `from __future__ import annotations` in every file, typed APIs throughout
-- **Seed:** 42 everywhere (configurable via YAML)
-- **Config overrides:** CLI dot-notation: `--set training.max_length=1024`
-
-## GPU requirements
-
-BF16 training requires NVIDIA GPUs that support BF16 (RTX 3090/4090, A100, etc.). 4-bit evaluation additionally needs `bitsandbytes`.
+- Use `rg` / `rg --files` for searching.
+- Preserve existing stage outputs and adapters unless explicitly asked.
+- Write files atomically when scripts generate artifacts.
+- Keep generated data under ignored paths such as `data/instruction/` and
+  `outputs/`.
+- Do not commit secrets. Config `swanlab_api_key` values must remain `null`;
+  use `SWANLAB_API_KEY` from the environment.

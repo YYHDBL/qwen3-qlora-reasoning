@@ -3,7 +3,7 @@ experiment:
   output_root: outputs/stage1_5_strict
   swanlab_project: "stage1-5-strict"
   swanlab_workspace: yyhdbl
-  swanlab_api_key: w5i4zEmPe04Nm4ul9RloZ
+  swanlab_api_key: null
 
 model:
   id: Qwen/Qwen3-4B-Base
