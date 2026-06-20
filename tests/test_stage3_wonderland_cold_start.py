@@ -96,10 +96,10 @@ def unit_prompt() -> str:
     return "\n".join(
         [
             "In Alice's Wonderland, a secret unit conversion is applied to measurements. For example:",
-            "10.00 m becomes 20.00",
-            "5.00 m becomes 10.00",
-            "7.50 m becomes 15.00",
-            "Now, convert the following measurement: 3.25 m",
+            "10.00 kg becomes 20.00",
+            "5.00 kg becomes 10.00",
+            "7.50 kg becomes 15.00",
+            "Now, convert the following measurement: 3.25 kg",
         ]
     )
 
@@ -180,6 +180,50 @@ def test_reasoner_registry_returns_uniform_result_and_debug_trace():
     assert "\\boxed" not in result.compressed_trace
 
 
+def test_unit_reasoner_uses_numeric_tolerance_and_returns_gold_string():
+    module = load_module()
+    problem = module.parse_wonderland_problem(
+        {"id": "u1", "prompt": unit_prompt(), "answer": "6.50"}
+    )
+
+    result = module.reason_unit_conversion(problem)
+
+    assert result.ok is True
+    assert result.answer == "6.50"
+    assert result.task_type == "unit_conversion"
+    assert "coefficient" in result.raw_trace
+    assert "\\boxed" not in result.raw_trace
+    assert result.compressed_trace == "\n".join(
+        [
+            "Task type: unit conversion.",
+            "Compute output/input ratios from the examples. The ratios are consistent around 2.",
+            "Apply the coefficient to the query value and round to the required format.",
+        ]
+    )
+
+
+def test_gravity_reasoner_uses_numeric_tolerance_and_returns_gold_string():
+    module = load_module()
+    problem = module.parse_wonderland_problem(
+        {"id": "g1", "prompt": gravity_prompt(), "answer": "32.00"}
+    )
+
+    result = module.reason_gravity(problem)
+
+    assert result.ok is True
+    assert result.answer == "32.00"
+    assert result.task_type == "gravity"
+    assert "g=" in result.raw_trace
+    assert "\\boxed" not in result.raw_trace
+    assert result.compressed_trace == "\n".join(
+        [
+            "Task type: gravity.",
+            "Use g = 2*d/t^2 from the examples. The examples give a consistent g around 4.",
+            "Then compute d = 0.5*g*t^2 for the query time and round to the required format.",
+        ]
+    )
+
+
 def test_generation_uses_stage3_sft_pool_only_and_writes_outputs(tmp_path):
     module = load_module()
     input_csv = tmp_path / "train.csv"
@@ -244,6 +288,11 @@ def test_generation_uses_stage3_sft_pool_only_and_writes_outputs(tmp_path):
     assert report["sample_type_counts"]["stage1_5_strict_replay"] == 2
     assert report["sample_type_counts"]["stage2_thinking_replay"] == 2
     assert report["tokenizer"]["kind"] == "real"
+    assert report["task_audit"]["unit_conversion"]["train_source_total"] == 1
+    assert report["task_audit"]["unit_conversion"]["answer_only"] == 1
+    assert report["task_audit"]["unit_conversion"]["compressed_cot"] == 1
+    assert report["task_audit"]["unit_conversion"]["reasoner_success_rate"]["rate"] == 1.0
+    assert report["task_audit"]["gravity"]["train_source_total"] == 0
 
 
 def test_compressed_cot_protocol_has_only_final_answer_after_think(tmp_path):
