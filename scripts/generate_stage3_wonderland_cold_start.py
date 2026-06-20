@@ -70,6 +70,7 @@ ROMAN_ANSWER_RE = re.compile(r"[IVXLCDM]+")
 NUMERIC_ANSWER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 BOXED_RE = re.compile(r"\\boxed\{([^}]*)\}")
 EQUATION_NUMERIC_RE = re.compile(r"^\d+\D\d+$")
+NUMBER_PATTERN = r"-?\d+(?:\.\d+)?"
 
 BIT_PREFIX = "In Alice's Wonderland, a secret bit manipulation rule transforms"
 GRAVITY_PREFIX = "In Alice's Wonderland, the gravitational constant has been secretly changed"
@@ -315,18 +316,21 @@ def parse_wonderland_problem(row: Mapping[str, str]) -> Problem:
     elif task_type == TASK_UNIT:
         examples = [
             Example(a, b)
-            for a, b in re.findall(r"(\d+(?:\.\d+)?) m becomes (\d+(?:\.\d+)?)", prompt)
+            for a, b in re.findall(
+                rf"({NUMBER_PATTERN})\s+\S+\s+becomes\s+({NUMBER_PATTERN})",
+                prompt,
+            )
         ]
-        match = re.search(r"convert the following measurement: (\d+(?:\.\d+)?) m", prompt)
+        match = re.search(rf"convert the following measurement:\s+({NUMBER_PATTERN})\s+\S+", prompt)
     elif task_type == TASK_GRAVITY:
         examples = [
             Example(t, d)
             for t, d in re.findall(
-                r"For t = (\d+(?:\.\d+)?)s, distance = (\d+(?:\.\d+)?) m",
+                rf"For t = ({NUMBER_PATTERN})s, distance = ({NUMBER_PATTERN}) m",
                 prompt,
             )
         ]
-        match = re.search(r"falling distance for t = (\d+(?:\.\d+)?)s", prompt)
+        match = re.search(rf"falling distance for t = ({NUMBER_PATTERN})s", prompt)
     elif task_type == TASK_CIPHER:
         examples = _parse_arrow_examples(prompt)
         match = re.search(r"decrypt the following text: (.+)$", prompt)
@@ -409,28 +413,45 @@ def build_numeral_trace(problem: Problem, answer: str, raw_trace: str) -> str:
     )
 
 
-def build_unit_trace(problem: Problem, answer: str, raw_trace: str) -> str:
-    factor_line = next((line for line in raw_trace.splitlines() if "median factor" in line), "")
-    factor = _clean_trace_line(factor_line) or "the median conversion factor from examples"
+def _format_compact_number(value: float) -> str:
+    text = f"{value:.6g}"
+    return "0" if text == "-0" else text
+
+
+def _numeric_close(predicted: float, gold: float) -> bool:
+    abs_error = abs(predicted - gold)
+    if abs_error <= 0.05:
+        return True
+    denom = max(abs(gold), 1e-12)
+    return abs_error / denom <= 0.005
+
+
+def _parse_float(value: str) -> float:
+    return float(value.strip())
+
+
+def _coefficient(values: Sequence[float]) -> float:
+    return float(statistics.median(values))
+
+
+def build_unit_trace(coef: float) -> str:
+    coef_text = _format_compact_number(coef)
     return "\n".join(
         [
-            "Task type: unit_conversion.",
-            f"Use {factor}.",
-            f"Multiply the query measurement {problem.question} by the selected factor.",
-            f"Truncate to the required decimal format: {answer}.",
+            "Task type: unit conversion.",
+            f"Compute output/input ratios from the examples. The ratios are consistent around {coef_text}.",
+            "Apply the coefficient to the query value and round to the required format.",
         ]
     )
 
 
-def build_gravity_trace(problem: Problem, answer: str, raw_trace: str) -> str:
-    k_line = next((line for line in raw_trace.splitlines() if "median k" in line), "")
-    k_text = _clean_trace_line(k_line) or "the median k from d = k*t^2 examples"
+def build_gravity_trace(g_value: float) -> str:
+    g_text = _format_compact_number(g_value)
     return "\n".join(
         [
             "Task type: gravity.",
-            f"Use {k_text}.",
-            f"Square query time {problem.question} and apply d = k*t^2.",
-            f"Truncate to the required decimal format: {answer}.",
+            f"Use g = 2*d/t^2 from the examples. The examples give a consistent g around {g_text}.",
+            "Then compute d = 0.5*g*t^2 for the query time and round to the required format.",
         ]
     )
 
@@ -532,15 +553,93 @@ def reason_numeral(problem: Problem) -> ReasonerResult:
 
 
 def reason_unit_conversion(problem: Problem) -> ReasonerResult:
-    from stage3_reasoners.unit_conversion import reasoning_unit_conversion
+    ratios: list[float] = []
+    raw_lines = ["local deterministic unit_conversion reasoner"]
+    try:
+        for ex in problem.examples:
+            inp = _parse_float(ex.input_value)
+            out = _parse_float(ex.output_value)
+            if inp == 0:
+                continue
+            ratio = out / inp
+            ratios.append(ratio)
+            raw_lines.append(f"example input={ex.input_value} output={ex.output_value} ratio={ratio:.12g}")
+        if not ratios:
+            return ReasonerResult(TASK_UNIT, "", "", "\n".join(raw_lines), False, "no_nonzero_examples", "low")
+        coef = _coefficient(ratios)
+        query_value = _parse_float(problem.question)
+        predicted = query_value * coef
+        gold = _parse_float(problem.answer)
+    except Exception as exc:  # noqa: BLE001
+        return ReasonerResult(TASK_UNIT, "", "", "\n".join(raw_lines), False, f"parse_error:{exc}", "low")
 
-    return _result_from_legacy(problem, TASK_UNIT, reasoning_unit_conversion, build_unit_trace)
+    raw_lines.extend(
+        [
+            f"coefficient={coef:.12g}",
+            f"query_value={problem.question}",
+            f"predicted={predicted:.12g}",
+            f"gold={problem.answer}",
+        ]
+    )
+    if not _numeric_close(predicted, gold):
+        raw_lines.append(f"numeric_tolerance_failed abs_error={abs(predicted - gold):.12g}")
+        return ReasonerResult(TASK_UNIT, "", "", "\n".join(raw_lines), False, "numeric_tolerance_failed", "low")
+    compressed = build_unit_trace(coef)
+    return ReasonerResult(
+        TASK_UNIT,
+        problem.answer,
+        compressed,
+        "\n".join(raw_lines),
+        True,
+        "",
+        "high",
+        {"coefficient": coef, "predicted": predicted},
+    )
 
 
 def reason_gravity(problem: Problem) -> ReasonerResult:
-    from stage3_reasoners.gravity import reasoning_gravity
+    g_values: list[float] = []
+    raw_lines = ["local deterministic gravity reasoner"]
+    try:
+        for ex in problem.examples:
+            t = _parse_float(ex.input_value)
+            distance = _parse_float(ex.output_value)
+            if t == 0:
+                continue
+            g = 2 * distance / (t * t)
+            g_values.append(g)
+            raw_lines.append(f"example t={ex.input_value} distance={ex.output_value} g={g:.12g}")
+        if not g_values:
+            return ReasonerResult(TASK_GRAVITY, "", "", "\n".join(raw_lines), False, "no_nonzero_examples", "low")
+        g_value = _coefficient(g_values)
+        query_t = _parse_float(problem.question)
+        predicted = 0.5 * g_value * query_t * query_t
+        gold = _parse_float(problem.answer)
+    except Exception as exc:  # noqa: BLE001
+        return ReasonerResult(TASK_GRAVITY, "", "", "\n".join(raw_lines), False, f"parse_error:{exc}", "low")
 
-    return _result_from_legacy(problem, TASK_GRAVITY, reasoning_gravity, build_gravity_trace)
+    raw_lines.extend(
+        [
+            f"g={g_value:.12g}",
+            f"query_time={problem.question}",
+            f"predicted={predicted:.12g}",
+            f"gold={problem.answer}",
+        ]
+    )
+    if not _numeric_close(predicted, gold):
+        raw_lines.append(f"numeric_tolerance_failed abs_error={abs(predicted - gold):.12g}")
+        return ReasonerResult(TASK_GRAVITY, "", "", "\n".join(raw_lines), False, "numeric_tolerance_failed", "low")
+    compressed = build_gravity_trace(g_value)
+    return ReasonerResult(
+        TASK_GRAVITY,
+        problem.answer,
+        compressed,
+        "\n".join(raw_lines),
+        True,
+        "",
+        "high",
+        {"g": g_value, "predicted": predicted},
+    )
 
 
 def reason_cipher(problem: Problem) -> ReasonerResult:
@@ -948,6 +1047,7 @@ def build_wonderland_rows_for_split(
     registry: ReasonerRegistry,
     token_counter: QwenTokenCounter,
     skipped: Counter[str],
+    task_skipped: dict[str, Counter[str]],
     raw_traces: list[dict[str, Any]],
     reasoner_stats: dict[str, Counter[str]],
 ) -> list[dict[str, Any]]:
@@ -974,15 +1074,21 @@ def build_wonderland_rows_for_split(
             }
         )
         if not result.ok:
-            skipped[f"cot_{task_type}_{result.error or 'reasoner_failed'}"] += 1
+            reason = f"cot_{task_type}_{result.error or 'reasoner_failed'}"
+            skipped[reason] += 1
+            task_skipped[task_type][reason] += 1
             continue
         if result.answer.strip() != problem.answer.strip():
             skipped["cot_answer_mismatch"] += 1
+            task_skipped[task_type]["cot_answer_mismatch"] += 1
             continue
         reasoner_stats[task_type]["ok"] += 1
         cot_row = make_cot_record(problem, result, index, token_counter)
         cot_row["id"] = f"stage3-{split}-wonderland-compressed_cot-{index:06d}-{problem.id}"
+        before_len = len(rows)
         _append_if_valid(rows, cot_row, skipped=skipped, seen_prompt_hashes=seen_prompt_hashes)
+        if len(rows) == before_len:
+            task_skipped[task_type]["cot_validation_or_duplicate_rejected"] += 1
     return rows
 
 
@@ -1043,6 +1149,7 @@ def build_report(
     rows_by_split: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
     skipped: Counter[str],
+    task_skipped: Mapping[str, Counter[str]],
     reasoner_stats: Mapping[str, Counter[str]],
     pool_ids: set[str],
     missing_split_ids: set[str],
@@ -1087,12 +1194,26 @@ def build_report(
         sample_type: round(count / len(all_rows), 6) if all_rows else 0.0
         for sample_type, count in sorted(sample_types.items())
     }
+    task_audit: dict[str, Any] = {}
+    for task in (TASK_GRAVITY, TASK_UNIT):
+        task_rows = [row for row in all_rows if row["task_type"] == task]
+        task_sample_types = Counter(str(row["sample_type"]) for row in task_rows)
+        skipped_top = task_skipped.get(task, Counter()).most_common(10)
+        counts = reasoner_stats.get(task, Counter())
+        task_audit[task] = {
+            "train_source_total": counts.get("attempted", 0),
+            "answer_only": task_sample_types.get(SAMPLE_ANSWER_ONLY, 0),
+            "compressed_cot": task_sample_types.get(SAMPLE_COMPRESSED_COT, 0),
+            "reasoner_success_rate": _rate(counts.get("ok", 0), counts.get("attempted", 0)),
+            "skipped_reason_top10": [{"reason": reason, "count": count} for reason, count in skipped_top],
+        }
     return {
         "sample_total": len(all_rows),
         "splits": {split: len(rows) for split, rows in rows_by_split.items()},
         "task_type_counts": dict(sorted(task_types.items())),
         "sample_type_counts": dict(sorted(sample_types.items())),
         "sample_type_ratios": ratios,
+        "task_audit": task_audit,
         "reasoner_success_rate_by_task_type": reasoner_rates,
         "skipped_reasons": dict(sorted((k, v) for k, v in skipped.items() if v)),
         "token_length_distribution": _length_stats(token_lengths),
@@ -1132,6 +1253,7 @@ def build_audit_md(report: Mapping[str, Any]) -> str:
             f"- task_type_counts: {json.dumps(report['task_type_counts'], ensure_ascii=False, sort_keys=True)}",
             f"- sample_type_counts: {json.dumps(report['sample_type_counts'], ensure_ascii=False, sort_keys=True)}",
             f"- sample_type_ratios: {json.dumps(report['sample_type_ratios'], ensure_ascii=False, sort_keys=True)}",
+            f"- task_audit: {json.dumps(report['task_audit'], ensure_ascii=False, sort_keys=True)}",
             f"- reasoner_success_rate_by_task_type: {json.dumps(report['reasoner_success_rate_by_task_type'], ensure_ascii=False, sort_keys=True)}",
             f"- skipped_reasons: {json.dumps(report['skipped_reasons'], ensure_ascii=False, sort_keys=True)}",
             f"- token_length_distribution: {json.dumps(report['token_length_distribution'], ensure_ascii=False, sort_keys=True)}",
@@ -1163,32 +1285,60 @@ def build_manual_review_md(
         "## Sample Rows",
         "",
     ]
+
+    def append_row(row: Mapping[str, Any], split: str, number: int) -> None:
+        user, assistant = get_user_and_assistant(row["messages"])
+        lines.extend(
+            [
+                f"### {number}. {split} / {row['sample_type']} / {row['task_type']}",
+                "",
+                f"- id: `{row['id']}`",
+                f"- token_length: {row['metadata'].get('token_length')}",
+                "",
+                "User:",
+                "```text",
+                user[:1200],
+                "```",
+                "",
+                "Assistant:",
+                "```text",
+                assistant[:1200],
+                "```",
+                "",
+            ]
+        )
+
     shown = 0
     for split, rows in rows_by_split.items():
         for row in rows[:5]:
             shown += 1
-            user, assistant = get_user_and_assistant(row["messages"])
-            lines.extend(
-                [
-                    f"### {shown}. {split} / {row['sample_type']} / {row['task_type']}",
-                    "",
-                    f"- id: `{row['id']}`",
-                    f"- token_length: {row['metadata'].get('token_length')}",
-                    "",
-                    "User:",
-                    "```text",
-                    user[:1200],
-                    "```",
-                    "",
-                    "Assistant:",
-                    "```text",
-                    assistant[:1200],
-                    "```",
-                    "",
-                ]
-            )
+            append_row(row, split, shown)
     if shown == 0:
         lines.append("No rows generated.")
+
+    lines.extend(["", "## Gravity Compressed-CoT Samples", ""])
+    gravity_rows: list[tuple[str, Mapping[str, Any]]] = []
+    unit_rows: list[tuple[str, Mapping[str, Any]]] = []
+    for split, rows in rows_by_split.items():
+        for row in rows:
+            if row["sample_type"] != SAMPLE_COMPRESSED_COT:
+                continue
+            if row["task_type"] == TASK_GRAVITY and len(gravity_rows) < 10:
+                gravity_rows.append((split, row))
+            if row["task_type"] == TASK_UNIT and len(unit_rows) < 10:
+                unit_rows.append((split, row))
+    if gravity_rows:
+        for idx, (split, row) in enumerate(gravity_rows, start=1):
+            append_row(row, split, idx)
+    else:
+        lines.append("No gravity compressed-CoT rows generated.")
+
+    lines.extend(["", "## Unit Conversion Compressed-CoT Samples", ""])
+    if unit_rows:
+        for idx, (split, row) in enumerate(unit_rows, start=1):
+            append_row(row, split, idx)
+    else:
+        lines.append("No unit_conversion compressed-CoT rows generated.")
     return "\n".join(lines) + "\n"
 
 
@@ -1231,6 +1381,7 @@ def generate_stage3_dataset(
         cache_dir=tokenizer_cache_dir,
     )
     skipped: Counter[str] = Counter()
+    task_skipped: dict[str, Counter[str]] = defaultdict(Counter)
     reasoner_stats: dict[str, Counter[str]] = defaultdict(Counter)
     raw_traces: list[dict[str, Any]] = []
     registry = build_reasoner_registry()
@@ -1263,6 +1414,7 @@ def generate_stage3_dataset(
             registry=registry,
             token_counter=token_counter,
             skipped=skipped,
+            task_skipped=task_skipped,
             raw_traces=raw_traces,
             reasoner_stats=reasoner_stats,
         )
@@ -1274,6 +1426,7 @@ def generate_stage3_dataset(
             registry=registry,
             token_counter=token_counter,
             skipped=skipped,
+            task_skipped=task_skipped,
             raw_traces=raw_traces,
             reasoner_stats=reasoner_stats,
         )
@@ -1322,6 +1475,7 @@ def generate_stage3_dataset(
     report = build_report(
         rows_by_split,
         skipped=skipped,
+        task_skipped=task_skipped,
         reasoner_stats=reasoner_stats,
         pool_ids=pool_ids,
         missing_split_ids=missing_split_ids,
