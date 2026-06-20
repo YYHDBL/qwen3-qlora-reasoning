@@ -148,13 +148,12 @@ def parse_bit_problem(record_id: str, prompt: str, answer: str) -> BitProblem:
     )
 
 
-def _load_nemotron_bit_reasoner() -> Any:
-    script_path = Path(__file__).resolve()
-    nemotron_root = script_path.parents[1].parent / "nemotron"
-    if str(nemotron_root) not in sys.path:
-        sys.path.insert(0, str(nemotron_root))
+def _load_bit_reasoner() -> Any:
+    script_dir = Path(__file__).resolve().parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
     try:
-        from reasoners.bit_manipulation import reasoning_bit_manipulation
+        from stage3_reasoners.bit_manipulation import reasoning_bit_manipulation
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"failed_to_import_bit_reasoner:{exc}") from exc
     return reasoning_bit_manipulation
@@ -200,7 +199,7 @@ def _build_compressed_trace(problem: BitProblem, rules: Sequence[str], answer: s
 
 def reason_bit_manipulation(problem: BitProblem) -> ReasonerResult:
     try:
-        reasoner = _load_nemotron_bit_reasoner()
+        reasoner = _load_bit_reasoner()
         reasoning_text = reasoner(problem)
     except Exception as exc:  # noqa: BLE001
         return ReasonerResult("", "", False, f"reasoner_error:{exc}", "low")

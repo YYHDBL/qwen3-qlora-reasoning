@@ -72,6 +72,13 @@ def test_reasoner_wrapper_returns_compressed_trace_and_answer():
     assert len(result.compressed_trace.splitlines()) <= 8
 
 
+def test_reasoner_loader_uses_repo_local_dependency():
+    module = load_module()
+    reasoner = module._load_bit_reasoner()
+
+    assert reasoner.__module__ == "stage3_reasoners.bit_manipulation"
+
+
 def test_generation_writes_answer_only_and_cot_with_valid_protocol(tmp_path):
     module = load_module()
     input_csv = tmp_path / "train.csv"
