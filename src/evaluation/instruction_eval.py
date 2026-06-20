@@ -130,7 +130,10 @@ def _run_validator(validator: Mapping[str, Any], prediction: str) -> bool:
             parsed = json.loads(prediction)
         except json.JSONDecodeError:
             return False
-        return parsed == validator.get("value")
+        expected = validator.get("value")
+        if expected is None:
+            return True
+        return parsed == expected
     if validator_type == "line_count":
         count = validator.get("count")
         return (

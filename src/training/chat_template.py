@@ -104,6 +104,10 @@ QWEN3_TRAINING_CHAT_TEMPLATE = """{#- Qwen3 聊天模板的训练变体（原始
        这使得模板在 [user, assistant] -> [user, assistant, tool] 转换时保持前缀不变。
      - 在 assistant 消息输出周围添加了 {% generation %} / {% endgeneration %}，
        以支持 SFT 训练中的 assistant-only loss 掩码。
+     - 关键修复：只在 reasoning_content 非空时才输出 <think> 块。
+       原版无条件输出 <think>（即使 reasoning 为空），导致 40% 的训练样本标签为
+       空 think 块（"<think>\\n\\n</think>\\n\\n答案"），模型学到的最优策略是跳过推理。
+       修复后 strict/no_robots 样本直接输出答案，模型学会区分何时该 think。
 -#}
 {%- if tools %}
     {{- '<|im_start|>system\\n' }}
@@ -149,7 +153,11 @@ QWEN3_TRAINING_CHAT_TEMPLATE = """{#- Qwen3 聊天模板的训练变体（原始
         {%- endif %}
         {{- '<|im_start|>' + message.role + '\\n' }}
         {%- generation %}
+        {%- if reasoning_content %}
         {{- '<think>\\n' + reasoning_content.strip('\\n') + '\\n</think>\\n\\n' + content.lstrip('\\n') }}
+        {%- else %}
+        {{- content.lstrip('\\n') }}
+        {%- endif %}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}
@@ -254,20 +262,23 @@ def configure_training_chat_template(tokenizer: Any) -> str:
 
 
 def render_generation_prompt(
-    tokenizer: Any, messages: Sequence[Mapping[str, str]]
+    tokenizer: Any,
+    messages: Sequence[Mapping[str, str]],
+    enable_thinking: bool | None = False,
 ) -> str:
     """将对话历史渲染为用于生成的 prompt 文本。
 
-    - add_generation_prompt=True: 末尾追加 "<|im_start|>assistant\\n"，指示模型开始补全
-    - enable_thinking=False: 不要求模型输出 <think> 推理过程，直接给出最终答案
-      （评估阶段关注最终答案质量，thinking 会引入额外 token 和不确定性）
+    - add_generation_prompt=True: 末尾追加 "<|im_start|>assistant\n"，指示模型开始补全
+    - enable_thinking=False (默认): 模板插入空 <think></think> 块，模型跳过推理直接作答
+      （Stage 1/1.5 strict 评估依赖此行为）
+    - enable_thinking=True: 模型自由决定是否输出 <think> 推理过程
+      （Stage 2 thinking 评估需要此行为）
+    - enable_thinking=None: 不传递该参数，由模板默认行为决定
     """
-    return tokenizer.apply_chat_template(
-        list(messages),
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False,
-    )
+    kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+    if enable_thinking is not None:
+        kwargs["enable_thinking"] = enable_thinking
+    return tokenizer.apply_chat_template(list(messages), **kwargs)
 
 
 def resolve_stop_token_ids(tokenizer: Any) -> dict[str, int]:

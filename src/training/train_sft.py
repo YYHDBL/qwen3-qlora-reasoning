@@ -25,7 +25,7 @@ from ..common.experiment import (
     write_yaml,
 )
 from .lora import build_lora_config
-from .model_loader import load_bf16_model, load_tokenizer, status
+from .model_loader import load_bf16_model, load_lora_model, load_tokenizer, status
 
 try:
     import swanlab
@@ -191,6 +191,19 @@ def build_sft_kwargs(
     # 仅 formal 模式设置 num_train_epochs，与 max_steps=-1 搭配使用
     if limits["num_train_epochs"] is not None:
         kwargs["num_train_epochs"] = float(limits["num_train_epochs"])
+    # 可选：启用 best checkpoint 跟踪，训练结束时加载 eval 最优 checkpoint
+    # load_best_model_at_end=True 要求 save_strategy 与 eval_strategy 一致（此处均为 steps）
+    # 启用后 trainer.save_model 保存的是 best checkpoint 而非最后一步
+    # best checkpoint 不会被 save_total_limit 删除，会额外保留
+    if bool(training.get("load_best_model_at_end", False)):
+        kwargs["load_best_model_at_end"] = True
+        kwargs["metric_for_best_model"] = str(
+            training.get("metric_for_best_model", "eval_loss")
+        )
+        # eval_loss 越小越好，accuracy 类指标越大越好
+        kwargs["greater_is_better"] = bool(
+            training.get("greater_is_better", False)
+        )
     return kwargs
 
 
@@ -306,6 +319,7 @@ def run_training(
     config: Mapping[str, Any],
     run_mode: str,
     resume_from_checkpoint: Path | None = None,
+    adapter_path: Path | None = None,
 ) -> dict[str, Any]:
     import torch
     from datasets import load_dataset
@@ -381,10 +395,16 @@ def run_training(
     # ── 第 4 步：模型加载 ──
     # tokenizer: padding_side="right"（训练用右侧 padding，loss 计算不受影响）
     tokenizer = load_tokenizer(config, for_training=True)
-    # 以 BF16 精度加载 base 模型，low_cpu_mem_usage=True 避免 CPU 内存双份拷贝
-    model = load_bf16_model(config)
-    # 构建 LoRA 配置（r、alpha、dropout、target_modules 等）
-    lora_config = build_lora_config(config)
+    if adapter_path:
+        # 从已有 adapter 继续训练：加载 base + 已有 adapter 权重，is_trainable=True
+        # adapter 的 LoRA A/B 和 modules_to_save（如 lm_head）均保持可训练
+        # 不传 peft_config 给 trainer，因为 adapter 已有自己的配置
+        model = load_lora_model(config, str(adapter_path), is_trainable=True)
+        lora_config = None
+    else:
+        # 全新训练：加载 base 模型 + 新的 LoRA 配置
+        model = load_bf16_model(config)
+        lora_config = build_lora_config(config)
 
     # ── 第 4.5 步：自定义 Trainer（统计监督/总 token 数）──
     class TokenCountingSFTTrainer(SFTTrainer):
@@ -423,14 +443,16 @@ def run_training(
 
     # ── 第 5 步：创建 Trainer ──
     training_args = SFTConfig(**build_sft_kwargs(config, output_dir, run_mode))
-    trainer = TokenCountingSFTTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        processing_class=tokenizer,
-        peft_config=lora_config,
-    )
+    trainer_kwargs: dict[str, Any] = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
+        "processing_class": tokenizer,
+    }
+    if lora_config is not None:
+        trainer_kwargs["peft_config"] = lora_config
+    trainer = TokenCountingSFTTrainer(**trainer_kwargs)
     # 附加 swanlab 回调，自动记录训练/评估/系统指标
     _add_swanlab_callback(trainer, config, run_mode)
 
@@ -573,6 +595,12 @@ def parse_args() -> argparse.Namespace:
         help="Override a YAML value, for example training.max_length=1024",
     )
     parser.add_argument("--resume-from-checkpoint", type=Path)
+    parser.add_argument(
+        "--adapter-path",
+        type=Path,
+        default=None,
+        help="Load an existing LoRA adapter and continue training on new data.",
+    )
     return parser.parse_args()
 
 
@@ -580,11 +608,18 @@ def main() -> None:
     args = parse_args()
     config = apply_overrides(load_yaml_config(args.config), args.overrides)
     validate_stage1_config(config)
+    adapter_path = args.adapter_path
+    if adapter_path is None:
+        config_adapter = config.get("init_adapter_path")
+        if config_adapter:
+            adapter_path = Path(config_adapter)
+            status(f"Using init_adapter_path from config: {adapter_path}")
     status(f"Starting Stage 1 run: mode={args.mode}")
     metrics = run_training(
         config,
         run_mode=args.mode,
         resume_from_checkpoint=args.resume_from_checkpoint,
+        adapter_path=adapter_path,
     )
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
 

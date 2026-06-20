@@ -1,0 +1,73 @@
+experiment:
+  name: stage2_thinking_warmup
+  output_root: outputs/stage2_thinking_warmup
+  swanlab_project: "stage2-thinking-warmup"
+  swanlab_workspace: yyhdbl
+  swanlab_api_key: w5i4zEmPe04Nm4ul9RloZ
+
+model:
+  id: models/Qwen3-1.7B-Base
+  revision: null
+  tokenizer_revision: null
+  cache_dir: .hf-cache/hub
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: false
+  load_in_8bit: false
+  trust_remote_code: false
+
+data:
+  dataset_id: HuggingFaceH4/no_robots
+  dataset_revision: null
+  train_split: train
+  validation_split: validation
+  output_dir: data/instruction/stage2_thinking
+
+lora:
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules: all-linear
+  bias: none
+  task_type: CAUSAL_LM
+  modules_to_save: ["lm_head"]
+
+training:
+  max_length: 1024
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  gradient_checkpointing: true
+  assistant_only_loss: true
+  packing: false
+  learning_rate: 0.00005
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+  optim: adamw_torch_fused
+  logging_steps: 1
+  save_steps: 10
+  eval_steps: 10
+  save_total_limit: 2
+  load_best_model_at_end: true
+  metric_for_best_model: eval_loss
+  greater_is_better: false
+  max_steps: -1
+  num_train_epochs: 1
+  seed: 42
+  bf16: true
+  tf32: true
+  overfit_examples: 16
+  overfit_steps: 40
+  smoke_examples: 256
+  smoke_steps: 20
+
+generation:
+  max_new_tokens: 256
+  do_sample: false
+
+evaluation:
+  dev_path: data/instruction/stage2_thinking/validation.jsonl
+  test_path: data/eval/instruction_test.jsonl
+  batch_size: 1
+
+init_adapter_path: outputs/stage1_5_strict_qwen3_1_7b_local/formal/adapter
