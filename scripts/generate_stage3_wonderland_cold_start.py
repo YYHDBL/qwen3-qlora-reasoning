@@ -151,7 +151,7 @@ class QwenTokenCounter:
         if hasattr(self.tokenizer, "encode"):
             return len(self.tokenizer.encode(text, add_special_tokens=False))
         tokenized = self.tokenizer(text, add_special_tokens=False)
-        return len(tokenized["input_ids"])
+        return self._extract_token_count(tokenized)
 
     def count_messages(self, messages: Sequence[Mapping[str, str]]) -> int:
         if hasattr(self.tokenizer, "apply_chat_template"):
@@ -162,16 +162,25 @@ class QwenTokenCounter:
                     add_generation_prompt=False,
                     enable_thinking=False,
                 )
-                return len(token_ids)
             except TypeError:
                 token_ids = self.tokenizer.apply_chat_template(
                     list(messages),
                     tokenize=True,
                     add_generation_prompt=False,
                 )
-                return len(token_ids)
+            return self._extract_token_count(token_ids)
         text = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
         return self.count_text(text)
+
+    @staticmethod
+    def _extract_token_count(token_ids: Any) -> int:
+        if isinstance(token_ids, list):
+            return len(token_ids)
+        if hasattr(token_ids, "input_ids"):
+            return len(token_ids.input_ids)
+        if hasattr(token_ids, "__len__"):
+            return len(token_ids)
+        return 0
 
 
 def log(message: str) -> None:
@@ -439,19 +448,48 @@ def build_cipher_trace(problem: Problem, answer: str, raw_trace: str) -> str:
 
 
 def build_symbolic_trace(problem: Problem, answer: str, raw_trace: str) -> str:
-    rule_line = next(
-        (line for line in raw_trace.splitlines() if "actions:" in line or "question operator" in line),
-        "",
-    )
-    rule = _clean_trace_line(rule_line) or "the operator-specific transformation inferred from examples"
+    """Build a compressed CoT trace for symbolic equation problems.
+
+    Returns empty string when the reasoner cannot provide a specific rule,
+    signalling the caller to degrade to answer-only (no compressed_cot row).
+    """
+    rule_text = _extract_symbolic_rule(raw_trace)
+    if not rule_text:
+        return ""
     return "\n".join(
         [
             "Task type: symbolic/equation-like transformation.",
-            f"Use {rule}.",
-            f"Apply the inferred transformation to query {problem.question}.",
-            f"The final result is {answer}.",
+            f"Rule: {rule_text}.",
+            f"Query: {problem.question}",
+            f"Result: {answer}",
         ]
     )
+
+
+def _extract_symbolic_rule(raw_trace: str) -> str:
+    """Extract the specific rule applied from a symbolic reasoner trace.
+
+    Returns empty string if the rule is too generic or unknown.
+    """
+    for line in raw_trace.splitlines():
+        s = line.strip()
+        # equation_numeric: "match, correct, actions: reversed operands, reversed result, addition"
+        m = re.search(r"match,\s*correct,\s*actions:\s*(.+)", s)
+        if m:
+            return m.group(1).rstrip(",")
+    if "The question operator is found in the examples." in raw_trace:
+        return ""
+    for line in raw_trace.splitlines():
+        s = line.strip()
+        # cryptarithm: "The question operator is 【+】, which is concatenation."
+        m = re.search(r"The question operator is (.+?), which is (.+?)\.?$", s)
+        if m:
+            operator = m.group(1).strip()
+            rule = m.group(2).strip().rstrip(".")
+            if rule.lower() == "unknown":
+                return ""
+            return f"{rule} on operator {operator}"
+    return ""
 
 
 TraceBuilder = Callable[[Problem, str, str], str]
@@ -474,6 +512,8 @@ def _result_from_legacy(
     if not answer:
         return ReasonerResult(task_type, "", "", raw_trace, False, "missing_reasoner_answer", "low")
     compressed = builder(problem, answer, raw_trace)
+    if not compressed:
+        return ReasonerResult(task_type, answer, "", raw_trace, False, "no_specific_rule_for_cot", "low")
     if "\\boxed" in compressed:
         return ReasonerResult(task_type, answer, "", raw_trace, False, "compressed_trace_boxed_residue", "low")
     return ReasonerResult(task_type, answer, compressed, raw_trace, True, "", "high")
@@ -1240,6 +1280,8 @@ def generate_stage3_dataset(
     )
 
     for split, limit in (("train", replay_train_limit), ("dev", replay_dev_limit)):
+        if limit <= 0:
+            continue
         rows_by_split[split].extend(
             build_replay_rows_for_split(
                 stage1_5_rows,
@@ -1262,6 +1304,19 @@ def generate_stage3_dataset(
                 skipped=skipped,
             )
         )
+
+    # Deduplicate by prompt_hash per split (stage1_5 and stage2 replay share prompts)
+    for split_name in rows_by_split:
+        seen: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for r in rows_by_split[split_name]:
+            h = str(r["metadata"]["prompt_hash"])
+            if h in seen:
+                skipped["duplicate_prompt_hash_across_replay"] += 1
+                continue
+            seen.add(h)
+            deduped.append(r)
+        rows_by_split[split_name] = deduped
 
     validate_all_splits(rows_by_split)
     report = build_report(

@@ -290,6 +290,8 @@ def test_cot_is_skipped_when_reasoner_answer_differs_from_gold(tmp_path):
         split_path=split_path,
         output_dir=output_dir,
         max_stage3_prompts=1,
+        replay_train_limit=0,
+        replay_dev_limit=0,
         tokenizer=FakeQwenTokenizer(),
         dry_run=True,
     )
